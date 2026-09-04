@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/productos_config_service.dart';
 import 'package:flygo_nuevo/servicios/custom_theme_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiquetaBolaAhorroUi;
+import 'package:flygo_nuevo/widgets/bola_en_desarrollo_aviso.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/widgets/cliente_bloqueo_gate.dart';
 import 'package:flygo_nuevo/widgets/promo_taxi_pista_animation.dart';
@@ -23,6 +24,9 @@ import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 import 'package:flygo_nuevo/widgets/rai_tipo_viaje_picker.dart';
 import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:phosphor_flutter/phosphor_flutter.dart';
+
+/// Bloquea nuevas solicitudes Turismo desde inicio (mantenimiento temporal).
+const bool kTurismoClienteEnMantenimiento = false;
 
 /// Colores del inicio derivados del fondo real (Apariencia + claro/oscuro).
 class _HomePalette {
@@ -245,6 +249,13 @@ class SeleccionServicio extends StatelessWidget {
                                         }
                                       }
                                       if (!context.mounted) return;
+                                      if (!await BolaEnDesarrolloAviso
+                                          .intentarEntrarTablero(
+                                        context,
+                                      )) {
+                                        return;
+                                      }
+                                      if (!context.mounted) return;
                                       if (!await ClienteViajeActivoGate
                                           .intentarFlujoNuevoViaje(context)) {
                                         return;
@@ -402,14 +413,27 @@ class SeleccionServicio extends StatelessWidget {
   /// Turismo: elegir Ahora o Programar con el mismo diseño de tarjetas.
   Future<void> _mostrarEleccionTurismo(BuildContext context) async {
     if (!context.mounted) return;
-    final bool? programar = await RaiTipoViajePicker.mostrar(
-      context,
-      titulo: 'Turismo RAI',
-      subtitulo:
-          'Traslados a aeropuertos, hoteles y destinos turísticos',
-    );
-    if (programar == null || !context.mounted) return;
-    _abrirTurismoDesdeInicio(context, modoAhora: !programar);
+    if (kTurismoClienteEnMantenimiento) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Turismo RAI'),
+          content: const Text(
+            'Estamos dando mantenimiento a esta sección.\n\n'
+            'Pronto estará disponible de nuevo. Gracias por tu paciencia.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    // Mismo arranque que Motor / «Ahora»: catálogo turístico dentro de [ProgramarViaje].
+    _abrirTurismoDesdeInicio(context, modoAhora: true);
   }
 
   void _abrirTurismoDesdeInicio(

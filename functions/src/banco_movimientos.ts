@@ -6,14 +6,11 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
-import { getFinanceConfig } from "./finance.js";
 import {
   extraerBancoTransaccionIdDeFila,
   movimientoBancoDocIdHash,
   resolveMovimientoBancoDocId,
 } from "./banco_movimiento_id.js";
-import { asignarReferenciaRecaudoUnicaEnViaje } from "./referencia_recaudo_registry.js";
-import { asignarQrRecaudoEnViaje } from "./recaudo_qr.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -171,33 +168,14 @@ export function parseCsvExtractoPopular(csv: string): FilaExtractoPopular[] {
   return out;
 }
 
-function esMetodoTransferencia(metodoPago: unknown): boolean {
-  const m = String(metodoPago ?? "").toLowerCase();
-  return m.includes("transfer");
-}
-
 /**
- * Al crear viaje transferencia (flag ON), asigna referenciaRecaudo solo desde servidor.
+ * Al crear viaje transferencia: deshabilitado — el cliente paga al taxista directamente.
+ * Recaudo central RAI se asigna en pool_finance (giras por cupos).
  */
 export const onViajeCreatedAsignarReferenciaRecaudo = onDocumentCreated(
   "viajes/{viajeId}",
-  async (event) => {
-    const snap = event.data;
-    if (!snap) return;
-
-    const viajeId = String(event.params.viajeId ?? "").trim();
-    if (!viajeId) return;
-
-    const d = snap.data() as AnyMap;
-    if (String(d.referenciaRecaudo ?? "").trim()) return;
-    if (!esMetodoTransferencia(d.metodoPago)) return;
-
-    const cfg = await getFinanceConfig();
-    if (!cfg.transferenciaRecaudoEnCuentaRai) return;
-
-    const referenciaRecaudo = await asignarReferenciaRecaudoUnicaEnViaje(snap.ref, viajeId);
-    await asignarQrRecaudoEnViaje(snap.ref, viajeId, d, referenciaRecaudo);
-    logger.info("[onViajeCreatedAsignarReferenciaRecaudo] ok", { viajeId, referenciaRecaudo });
+  async () => {
+    return;
   },
 );
 

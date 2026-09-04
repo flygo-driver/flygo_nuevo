@@ -8,7 +8,6 @@ import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo;
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
-import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_programado_confirmacion.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/pantallas/taxista/corporativo_ruta_detalle_informativo_page.dart';
@@ -27,6 +26,10 @@ import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 class NavigationService {
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
+
+  /// Alias de [ActiveTripService.kOverlayClienteViajeActivo] (fuente única).
+  static const Duration kOverlayClienteViajeActivo =
+      ActiveTripService.kOverlayClienteViajeActivo;
 
   static Future<T?> push<T>(Widget page) {
     final nav = navigatorKey.currentState;
@@ -53,10 +56,16 @@ class NavigationService {
     final NavigatorState tabNav = Navigator.of(context);
     final NavigatorState rootNav =
         Navigator.of(context, rootNavigator: true);
-    if (!identical(tabNav, rootNav) && tabNav.mounted) {
-      return tabNav.push<T>(MaterialPageRoute<T>(builder: (_) => page));
+    ActiveTripService.entrarClienteFlujoSolicitudViaje();
+    Future<T?> navegar() {
+      if (!identical(tabNav, rootNav) && tabNav.mounted) {
+        return tabNav.push<T>(MaterialPageRoute<T>(builder: (_) => page));
+      }
+      return push<T>(page);
     }
-    return push<T>(page);
+    return navegar().whenComplete(() {
+      ActiveTripService.salirClienteFlujoSolicitudViaje();
+    });
   }
 
   static Future<T?> replaceWith<T>(Widget page) {
@@ -118,6 +127,25 @@ class NavigationService {
         tabNav.pop();
       }
     }
+  }
+
+  static bool _contextoTieneClienteShell(BuildContext? context) {
+    if (context == null || !context.mounted) return false;
+    return context.findAncestorWidgetOfExactType<ClienteShell>() != null ||
+        context.findAncestorWidgetOfExactType<ClienteShellWithDeepLink>() !=
+            null;
+  }
+
+  static Future<bool> _remontarClienteShell(NavigatorState nav) async {
+    if (!nav.mounted) return false;
+    await nav.pushAndRemoveUntil<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const ClienteShellWithDeepLink(),
+      ),
+      (Route<dynamic> r) => false,
+    );
+    ActiveTripService.notificarRebuildShell();
+    return true;
   }
 
   static NavigatorState? navigatorRaiz({BuildContext? context}) {
@@ -182,12 +210,7 @@ class NavigationService {
     ShellTabController.taxistaIrARecibir();
     final bool viajeOperativo =
         faseViaje == 'acordada' || faseViaje == 'en_curso';
-    if (viajeOperativo) {
-      final String bid = (bolaId ?? '').trim();
-      if (bid.isNotEmpty) {
-        ActiveTripService.forzarInicioTaxistaShellBola(bolaId: bid);
-      }
-    } else {
+    if (!viajeOperativo) {
       ShellTabController.taxistaIrAPoolAhora();
     }
     if (!root.canPop()) {
@@ -276,9 +299,20 @@ class NavigationService {
   }
 
   /// Home del taxista tras cerrar viaje Bola / factura / modo mapa.
-  static Future<void> irAlInicioTaxista({BuildContext? context}) async {
+  static Future<void> irAlInicioTaxista({
+    BuildContext? context,
+    String? viajeIdCompletado,
+  }) async {
+    _cerrarCapasPostViajeEnNavigator(navigatorKey.currentState);
+    if (context != null && context.mounted) {
+      _cerrarCapasPostViajeEnNavigator(
+        Navigator.of(context, rootNavigator: true),
+      );
+    }
+    await ActiveTripService.prepararSalidaTaxistaAlInicio(
+      viajeIdCompletado: viajeIdCompletado,
+    );
     ShellTabController.taxistaIrARecibir();
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
     NavigatorState? nav = navigatorKey.currentState;
     if ((nav == null || !nav.mounted) &&
         context != null &&
@@ -290,6 +324,7 @@ class NavigationService {
       MaterialPageRoute<void>(builder: (_) => const TaxistaShell()),
       (Route<dynamic> r) => false,
     );
+    ActiveTripService.notificarRebuildShell();
   }
 
   static Future<void> clearAndGo(Widget page) async {
@@ -341,14 +376,19 @@ class NavigationService {
   /// rutas encima (pago, deep link suelto, etc.).
   static Future<void> clearAndGoViajeEnCursoCliente({
     NavigatorState? preNav,
+    bool forzarReabrir = false,
   }) async {
-    if (ActiveTripService.debeForzarInicioClienteShell) {
+    if (!forzarReabrir && ActiveTripService.clientePostViajeEnHome) {
       print(
-        '[VIAJE_ACTIVO] clearAndGoViajeEnCursoCliente omitido (usuario volvió al inicio)',
+        '[VIAJE_ACTIVO] clearAndGoViajeEnCursoCliente omitido (post-viaje en home)',
       );
       return;
     }
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
+    if (forzarReabrir) {
+      ActiveTripService.cancelarForzarInicioClienteShell();
+    }
+    ActiveTripService.restablecerClienteFlujoSolicitudViaje();
+    ActiveTripService.mantenerOverlayViajeEnShell(kOverlayClienteViajeActivo);
     ActiveTripService.notificarRebuildShell();
 
     for (int intento = 0; intento < 6; intento++) {
@@ -363,7 +403,7 @@ class NavigationService {
         );
         if (ok) {
           ActiveTripService.mantenerOverlayViajeEnShell(
-            const Duration(seconds: 120),
+            kOverlayClienteViajeActivo,
           );
           ActiveTripService.notificarRebuildShell();
           print(
@@ -380,8 +420,9 @@ class NavigationService {
     print('[VIAJE_ACTIVO] clearAndGoViajeEnCursoCliente sin navigator montado');
   }
 
-  /// Misma rama que [ProgramarViaje] tras `crearViajePendiente`: ahora → en curso;
-  /// programado lejano → espera; turismo → asignación o en curso si ya hay chofer.
+  /// Misma rama que [ProgramarViaje] tras `crearViajePendiente`: ahora → overlay;
+  /// programado lejano → confirmación en tab; turismo → mismo overlay (espera pool
+  /// o en curso según [ClientePantallaViajeActivo]).
   ///
   /// [forzarViajeInmediato]: tab «Ahora» / motor (paradas múltiples) — no mandar a programado
   /// aunque falle la heurística de fecha.
@@ -392,6 +433,8 @@ class NavigationService {
     NavigatorState? preNav,
     NavigatorState? preNavRaiz,
     bool forzarViajeInmediato = false,
+    /// Tras tocar «Confirmar viaje»: vacía el tab del formulario y fuerza overlay.
+    bool abrirEnCursoAlConfirmar = false,
   }) async {
     final DateTime nowUtc = DateTime.now().toUtc();
     final DateTime pickupUtc = fechaHoraPickup.toUtc();
@@ -402,14 +445,17 @@ class NavigationService {
           DateTime.now(),
         );
 
-    final String tipo = tipoServicio.trim().toLowerCase();
     final NavigatorState? raiz =
         preNavRaiz ?? navigatorKey.currentState ?? preNav;
 
     ActiveTripService.cancelarForzarInicioClienteShell();
+    unawaited(ActiveTripService.prepararModeloViajePegadoCliente(
+      FirebaseAuth.instance.currentUser?.uid ?? '',
+    ));
 
     if (!viajeInmediato) {
-      // Reserva futura (espera publishAt): dentro del tab → una sola barra inferior.
+      // Reserva futura: confirmación en tab, sin banner ni overlay de viaje activo.
+      ActiveTripService.liberarReservaProgramadaLejanaEnHome(viajeId: viajeId);
       await clearAndGoPage(
         preNav: preNav ?? raiz,
         page: ViajeProgramadoConfirmacion(
@@ -420,24 +466,45 @@ class NavigationService {
       return;
     }
 
-    if (tipo == 'turismo') {
-      final DocumentSnapshot<Map<String, dynamic>> snap =
-          await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
-      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
-      final bool choferAsignado =
-          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim().isNotEmpty;
-      if (choferAsignado) {
-        await clearAndGoViajeEnCursoCliente(preNav: raiz);
-      } else {
-        await clearAndGoPage(
-          preNav: preNav ?? raiz,
-          page: EsperaAsignacionTurismo(viajeId: viajeId),
-        );
-      }
-      return;
-    }
+    ActiveTripService.liberarReservaProgramadaLejanaEnHome();
+    ActiveTripService.registrarViajeOperativoCliente(viajeId);
+    ActiveTripService.restablecerClienteFlujoSolicitudViaje();
 
-    await clearAndGoViajeEnCursoCliente(preNav: raiz);
+    await _abrirOverlayViajeEnCursoCliente(
+      preNav: raiz,
+      forzarReabrir: abrirEnCursoAlConfirmar,
+    );
+  }
+
+  /// Motor, tab «Ahora» y turismo (catálogo): vacía el formulario y abre overlay.
+  static Future<void> navegarTrasConfirmarViajeInmediatoCliente({
+    required String viajeId,
+    required DateTime fechaHoraPickup,
+    NavigatorState? preNav,
+    NavigatorState? preNavRaiz,
+  }) {
+    return navegarTrasCrearViajeCliente(
+      viajeId: viajeId,
+      fechaHoraPickup: fechaHoraPickup,
+      preNav: preNav,
+      preNavRaiz: preNavRaiz,
+      forzarViajeInmediato: true,
+      abrirEnCursoAlConfirmar: true,
+    );
+  }
+
+  static Future<void> _abrirOverlayViajeEnCursoCliente({
+    NavigatorState? preNav,
+    bool forzarReabrir = false,
+  }) async {
+    if (forzarReabrir) {
+      ClienteShellNavBridge.popAllTabRoutes();
+      ShellTabController.clienteIrAInicio();
+    }
+    await clearAndGoViajeEnCursoCliente(
+      preNav: preNav,
+      forzarReabrir: forzarReabrir,
+    );
   }
 
   /// Tras aceptar viaje en pool: pantalla completa [ViajeEnCursoTaxista].
@@ -623,6 +690,7 @@ class NavigationService {
   }) async {
     ActiveTripService.bloquearShellTaxistaTrasAceptar(
       const Duration(minutes: 3),
+      viajeId: viajeId,
     );
     final bool navego = await clearAndGoViajeEnCursoTaxista(preNav: preNav);
     if (!navego) {
@@ -664,17 +732,34 @@ class NavigationService {
     BuildContext? context,
     String? viajeId,
     bool forzarLimpiarViajeActivo = false,
+    bool omitirGuardOperativo = false,
+    /// Cuando [activarPausaVoluntariaClienteShell] ya fijó el gate de pausa.
+    bool omitirForzarInicioShell = false,
   }) async {
-    if (forzarLimpiarViajeActivo) {
-      ActiveTripService.forzarInicioClienteShell();
-    } else {
-      ActiveTripService.forzarInicioClienteShell(
-        duracion: const Duration(hours: 24),
-      );
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    final String vidLimpieza = (viajeId ?? '').trim();
+
+    // Post-viaje / turismo cerrado: descartar el viaje en RAM antes de quitar
+    // el gate de home; si no, un frame re-monta ViajeEnCurso (spinner infinito).
+    if (forzarLimpiarViajeActivo && vidLimpieza.isNotEmpty) {
+      ActiveTripService.liberarClienteTrasCancelacionOViajeTerminal(vidLimpieza);
     }
 
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (!omitirForzarInicioShell) {
+      if (!forzarLimpiarViajeActivo) {
+        ActiveTripService.forzarInicioClienteShell(
+          duracion: const Duration(hours: 24),
+        );
+      }
+    }
+
     if (uid != null && uid.trim().isNotEmpty) {
+      if (forzarLimpiarViajeActivo && vidLimpieza.isNotEmpty) {
+        await ActiveTripService.liberarClienteTrasViajeEliminado(
+          vidLimpieza,
+          uid: uid.trim(),
+        );
+      }
       await ActiveTripService.prepararSalidaClienteAlInicio(
         uid: uid,
         viajeId: viajeId,
@@ -700,14 +785,22 @@ class NavigationService {
         // Pantallas dentro del tab (ProgramarViaje, EsperaAsignacionTurismo, etc.)
         // viven en un navigator anidado: vaciarlo antes del rebuild en raíz.
         _vaciarPilaTabShellSiAnidada(context);
+        ClienteShellNavBridge.popAllTabRoutes();
 
-        // Ya en ClienteShell (viaje en curso a pantalla completa): no remontar —
-        // evita spinner congelado y doble suscripción al stream.
+        // Ya en ClienteShell en raíz: rebuild basta. Si la ruta actual es otra
+        // (p. ej. ViajeProgramadoConfirmacion a pantalla completa), remontar shell.
         if (!nav.canPop()) {
-          ActiveTripService.forzarInicioClienteShell();
-          ActiveTripService.notificarRebuildShell();
+          final BuildContext? navCtx = nav.context;
+          if (_contextoTieneClienteShell(navCtx)) {
+            ActiveTripService.notificarRebuildShell();
+            print(
+              '[VIAJE_ACTIVO] irAlInicioCliente → shell en raíz, rebuild sin remontar',
+            );
+            return;
+          }
+          await _remontarClienteShell(nav);
           print(
-            '[VIAJE_ACTIVO] irAlInicioCliente → shell en raíz, rebuild sin remontar',
+            '[VIAJE_ACTIVO] irAlInicioCliente → shell remontado (ruta no-shell)',
           );
           return;
         }
@@ -717,7 +810,9 @@ class NavigationService {
           ),
           (Route<dynamic> r) => false,
         );
-        ActiveTripService.forzarInicioClienteShell();
+        if (!omitirForzarInicioShell && !forzarLimpiarViajeActivo) {
+          ActiveTripService.forzarInicioClienteShell();
+        }
         ActiveTripService.notificarRebuildShell();
         print('[VIAJE_ACTIVO] irAlInicioCliente → shell remontado');
         return;
@@ -727,6 +822,135 @@ class NavigationService {
       );
     }
     print('[VIAJE_ACTIVO] irAlInicioCliente sin navigator montado');
+  }
+
+  /// Salida urgente tras post-viaje o error global: limpia viaje activo y vuelve al home.
+  static Future<void> volverAlInicioClienteUrgente({
+    BuildContext? context,
+    String? viajeId,
+  }) async {
+    _cerrarCapasPostViajeEnNavigator(navigatorKey.currentState);
+    if (context != null && context.mounted) {
+      _cerrarCapasPostViajeEnNavigator(
+        Navigator.of(context, rootNavigator: true),
+      );
+    }
+    await irAlInicioCliente(
+      context: context,
+      viajeId: viajeId,
+      forzarLimpiarViajeActivo: true,
+    );
+  }
+
+  /// Quita factura/recibo/post-viaje del stack raíz sin tocar el shell base.
+  static void _cerrarCapasPostViajeEnNavigator(NavigatorState? nav) {
+    if (nav == null || !nav.mounted) return;
+    for (int i = 0; i < 6 && nav.canPop(); i++) {
+      nav.pop();
+    }
+  }
+
+  /// Reserva programada lejana: pantalla de confirmación dentro del tab Inicio.
+  static Future<void> abrirConfirmacionProgramadoEnShell({
+    required String viajeId,
+    DateTime? fechaHoraPickup,
+    NavigatorState? preNav,
+  }) async {
+    ActiveTripService.liberarReservaProgramadaLejanaEnHome(viajeId: viajeId);
+    ShellTabController.clienteIrAInicio();
+    ClienteShellNavBridge.popAllTabRoutes();
+    final Widget page = ViajeProgramadoConfirmacion(
+      viajeId: viajeId,
+      fechaHoraPickup: fechaHoraPickup,
+    );
+    if (ClienteShellNavBridge.canPushOnInicioTab) {
+      ActiveTripService.entrarClienteFlujoSolicitudViaje();
+      return ClienteShellNavBridge.pushOnInicioTab<void>(page).whenComplete(() {
+        ActiveTripService.salirClienteFlujoSolicitudViaje();
+      });
+    }
+    NavigatorState? nav = preNav ?? navigatorKey.currentState;
+    if (nav != null && nav.mounted) {
+      await nav.push<void>(
+        MaterialPageRoute<void>(builder: (_) => page),
+      );
+    }
+  }
+
+  /// Sale de la confirmación de reserva programada al home del cliente.
+  static Future<void> salirReservaProgramadaAlInicioCliente({
+    String? viajeId,
+    bool forzarLimpiarViajeActivo = false,
+    BuildContext? context,
+  }) async {
+    final String vid = (viajeId ?? '').trim();
+
+    if (forzarLimpiarViajeActivo) {
+      ActiveTripService.forzarInicioClienteShell();
+    } else {
+      ActiveTripService.liberarReservaProgramadaLejanaEnHome(viajeId: vid);
+    }
+
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.trim().isNotEmpty) {
+      await ActiveTripService.prepararSalidaClienteAlInicio(
+        uid: uid,
+        viajeId: vid.isNotEmpty ? vid : null,
+        forzarLimpieza: forzarLimpiarViajeActivo,
+      );
+      if (forzarLimpiarViajeActivo) {
+        await _limpiarViajeActivoClienteEnServidor(uid.trim());
+      }
+    } else {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+    }
+
+    ShellTabController.clienteIrAInicio();
+    ClienteShellNavBridge.popAllTabRoutes();
+
+    if (context != null && context.mounted) {
+      _vaciarPilaTabShellSiAnidada(context);
+      try {
+        final NavigatorState tabNav = Navigator.of(context);
+        final NavigatorState rootNav =
+            Navigator.of(context, rootNavigator: true);
+        if (!identical(tabNav, rootNav) && tabNav.mounted && tabNav.canPop()) {
+          tabNav.pop();
+          ActiveTripService.notificarRebuildShell();
+          print(
+            '[VIAJE_ACTIVO] salirReservaProgramadaAlInicioCliente → pop tab',
+          );
+          return;
+        }
+      } catch (_) {}
+    }
+
+    for (int intento = 0; intento < 6; intento++) {
+      NavigatorState? nav = navigatorKey.currentState;
+      if ((nav == null || !nav.mounted) &&
+          context != null &&
+          context.mounted) {
+        nav = Navigator.of(context, rootNavigator: true);
+      }
+      if (nav != null && nav.mounted) {
+        if (!nav.canPop() && _contextoTieneClienteShell(nav.context)) {
+          ActiveTripService.notificarRebuildShell();
+          print(
+            '[VIAJE_ACTIVO] salirReservaProgramadaAlInicioCliente → rebuild shell',
+          );
+          return;
+        }
+        await _remontarClienteShell(nav);
+        print(
+          '[VIAJE_ACTIVO] salirReservaProgramadaAlInicioCliente → shell remontado',
+        );
+        return;
+      }
+      await Future<void>.delayed(
+        Duration(milliseconds: 80 * (intento + 1)),
+      );
+    }
+    print('[VIAJE_ACTIVO] salirReservaProgramadaAlInicioCliente sin navigator');
   }
 
   /// Reabre el shell taxista tras recarga AZUL (deep link o resume).
@@ -757,6 +981,14 @@ class NavigationService {
     );
   }
 
+  /// Vuelve al home del cliente sin activar pausa ni gate de 24 h
+  /// (p. ej. salir de [ProgramarViaje] sin viaje activo).
+  static void volverAlHomeClienteLigero({BuildContext? context}) {
+    ShellTabController.clienteIndex.value = 0;
+    ClienteShellNavBridge.popAllTabRoutes();
+    ActiveTripService.notificarRebuildShell();
+  }
+
   /// Pausa el viaje en curso y vuelve al home de RAI sin cancelar ni limpiar
   /// `viajeActivoId` (el cliente puede retomar desde el banner).
   static Future<void> pausarViajeClienteYVolverARai({
@@ -767,6 +999,7 @@ class NavigationService {
       context: context,
       viajeId: viajeId,
       forzarLimpiarViajeActivo: false,
+      omitirForzarInicioShell: true,
     );
   }
 
@@ -790,57 +1023,142 @@ class NavigationService {
       return;
     }
 
+    Map<String, dynamic>? docData;
+    String? docId;
+
     try {
-      final DocumentSnapshot<Map<String, dynamic>> userSnap =
-          await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
-      final String viajeId =
-          (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
-      if (viajeId.isEmpty) {
-        _retomarViajeActivoClienteOverlay();
-        return;
-      }
-
-      final DocumentSnapshot<Map<String, dynamic>> viajeSnap =
-          await FirebaseFirestore.instance.collection('viajes').doc(viajeId).get();
-      if (!viajeSnap.exists) {
-        _retomarViajeActivoClienteOverlay();
-        return;
-      }
-
-      final Map<String, dynamic> d = viajeSnap.data() ?? <String, dynamic>{};
-      if (ViajePoolTaxistaGate.esReservaProgramadaLejana(d)) {
-        ShellTabController.clienteIrAInicio();
-        ClienteShellNavBridge.popAllTabRoutes();
-        final DateTime? pickup = _fechaHoraDesdeDocViaje(d['fechaHora']);
-        final Widget page = ViajeProgramadoConfirmacion(
-          viajeId: viajeId,
-          fechaHoraPickup: pickup,
-        );
-        if (ClienteShellNavBridge.canPushOnInicioTab) {
-          await ClienteShellNavBridge.pushOnInicioTab<void>(page);
-        } else {
-          final NavigatorState? nav = navigatorKey.currentState;
-          if (nav != null && nav.mounted) {
-            await nav.push<void>(
-              MaterialPageRoute<void>(builder: (_) => page),
-            );
-          }
+      final DocumentSnapshot<Map<String, dynamic>>? doc =
+          await ActiveTripService.obtenerDocumentoViajeActivo(uid);
+      if (doc != null && doc.exists) {
+        docId = doc.id;
+        docData = doc.data() ?? <String, dynamic>{};
+        if (ViajePoolTaxistaGate.esReservaProgramadaLejana(docData)) {
+          await _pushConfirmacionReservaProgramada(
+            viajeId: doc.id,
+            docHint: docData,
+          );
+          return;
         }
-        return;
+        if (ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(
+          docData,
+          uid,
+        )) {
+          ActiveTripService.registrarViajeOperativoCliente(doc.id);
+          ActiveTripService.sembrarBootstrapViajeCliente(doc.id, docData);
+        }
+      } else {
+        final String? hid =
+            await ActiveTripService.hidratarViajeActivoCliente(uid);
+        if (hid != null) {
+          docId = hid;
+          docData = ActiveTripService.peekResumenViajeCliente(hid);
+        }
       }
     } catch (_) {
-      // Fallback: mismo comportamiento que antes del fix.
+      // Revisar reserva lejana antes del overlay optimista.
+    }
+
+    final String vidFallback =
+        ActiveTripService.resolverViajeIdClienteParaPausa(preferido: docId);
+    if (vidFallback.isNotEmpty) {
+      final bool operativo =
+          await ActiveTripService.viajeDocSigueOperativoParaCliente(
+        vidFallback,
+        uid,
+      );
+      final Map<String, dynamic>? cache =
+          ActiveTripService.peekResumenViajeCliente(vidFallback);
+      if (!operativo && (cache == null || cache.isEmpty)) {
+        final bool ausente =
+            await ActiveTripService.confirmarViajeAusenteEnFirestore(
+          vidFallback,
+          uid: uid,
+        );
+        if (ausente) {
+          await ActiveTripService.liberarClienteTrasViajeEliminado(
+            vidFallback,
+            uid: uid,
+          );
+          snackViajeYaNoDisponible();
+          return;
+        }
+      }
+    }
+    if (vidFallback.isNotEmpty &&
+        await _intentarAbrirReservaProgramadaLejana(
+          viajeId: vidFallback,
+          docHint: docData,
+        )) {
+      return;
     }
 
     _retomarViajeActivoClienteOverlay();
   }
 
+  static Future<bool> _intentarAbrirReservaProgramadaLejana({
+    required String viajeId,
+    Map<String, dynamic>? docHint,
+  }) async {
+    Map<String, dynamic>? d = docHint;
+    d ??= ActiveTripService.peekResumenViajeCliente(viajeId);
+    if (d == null || d.isEmpty) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> snap =
+            await FirebaseFirestore.instance
+                .collection('viajes')
+                .doc(viajeId)
+                .get();
+        if (snap.exists) {
+          d = snap.data() ?? <String, dynamic>{};
+        }
+      } catch (_) {}
+    }
+    if (d == null || !ViajePoolTaxistaGate.esReservaProgramadaLejana(d)) {
+      return false;
+    }
+    await _pushConfirmacionReservaProgramada(
+      viajeId: viajeId,
+      docHint: d,
+    );
+    return true;
+  }
+
+  static Future<void> _pushConfirmacionReservaProgramada({
+    required String viajeId,
+    Map<String, dynamic>? docHint,
+  }) async {
+    ActiveTripService.liberarReservaProgramadaLejanaEnHome(viajeId: viajeId);
+    if (docHint != null && docHint.isNotEmpty) {
+      ActiveTripService.sembrarBootstrapViajeCliente(viajeId, docHint);
+    }
+    ShellTabController.clienteIrAInicio();
+    ClienteShellNavBridge.popAllTabRoutes();
+    final DateTime? pickup = _fechaHoraDesdeDocViaje(docHint?['fechaHora']);
+    final Widget page = ViajeProgramadoConfirmacion(
+      viajeId: viajeId,
+      fechaHoraPickup: pickup,
+    );
+    if (ClienteShellNavBridge.canPushOnInicioTab) {
+      await ClienteShellNavBridge.pushOnInicioTab<void>(page);
+    } else {
+      final NavigatorState? nav = navigatorKey.currentState;
+      if (nav != null && nav.mounted) {
+        await nav.push<void>(
+          MaterialPageRoute<void>(builder: (_) => page),
+        );
+      }
+    }
+  }
+
   static void _retomarViajeActivoClienteOverlay() {
     ActiveTripService.cancelarForzarInicioClienteShell();
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
     ClienteShellNavBridge.popAllTabRoutes();
     ShellTabController.clienteIrAInicio();
-    ActiveTripService.notificarRebuildShell();
+    unawaited(
+      clearAndGoViajeEnCursoCliente(forzarReabrir: true).then((_) {
+        ActiveTripService.notificarRebuildShell();
+      }),
+    );
   }
 
   static Future<void> _limpiarViajeActivoClienteEnServidor(String uid) async {
@@ -860,6 +1178,14 @@ class NavigationService {
     final nav = navigatorKey.currentState;
     if (nav == null) return;
     await nav.pushNamedAndRemoveUntil('/auth_check', (Route<dynamic> r) => false);
+  }
+
+  static void snackViajeYaNoDisponible({BuildContext? context}) {
+    _snackCorporativo(
+      'El viaje ya no está disponible. Puedes solicitar uno nuevo.',
+      context: context,
+      backgroundColor: const Color(0xFF1B5E20),
+    );
   }
 
   static void _snackCorporativo(
@@ -1018,9 +1344,11 @@ class NavigationService {
     }
 
     ActiveTripService.cancelarMantenimientoOverlayViaje();
-    ActiveTripService.cancelarBloqueoShellTaxista();
     await ViajesRepo.limpiarViajeActivoSiNoOperativo(uid);
     await RaiLocalReadCache.clearActiveTripId(uid);
+    CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(viajeIdResuelto);
+    ActiveTripService.registrarViajeOperativoTaxista(viajeIdResuelto);
+    ActiveTripService.markTaxistaTripScreenMounted();
 
     await push(
       CorporativoRutaDetalleInformativoPage(

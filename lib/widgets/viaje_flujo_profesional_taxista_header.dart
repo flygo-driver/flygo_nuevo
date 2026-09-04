@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/viaje_codigo_verificacion_helper.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
 import 'package:flygo_nuevo/widgets/negocio_aliado_taxista_banner.dart';
@@ -32,11 +33,6 @@ class ViajeFlujoProfesionalTaxistaHeader extends StatelessWidget {
 
   bool get _faseRuta =>
       EstadosViaje.esAbordo(estadoBase) || EstadosViaje.esEnCurso(estadoBase);
-
-  bool _pinValido(String? raw) {
-    final String s = (raw ?? '').trim();
-    return s.length >= 4 && s.length <= 8;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,8 +78,11 @@ class ViajeFlujoProfesionalTaxistaHeader extends StatelessWidget {
               const SizedBox(height: 10),
               _tarjetaPin(
                 fasePickup: _fasePickup,
-                pinValido: _pinValido(
-                  (data['codigoVerificacion'] ?? codigoEsperado)?.toString(),
+                pinValido: ViajeCodigoVerificacionHelper.pinValido(
+                  ViajeCodigoVerificacionHelper.pinDesdeViajeDoc(
+                    viajeData: data,
+                    codigoDesdeModelo: codigoEsperado,
+                  ),
                 ),
               ),
             ],

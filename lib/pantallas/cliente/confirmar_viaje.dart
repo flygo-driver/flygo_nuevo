@@ -192,6 +192,7 @@ class _ConfirmarViajePageState extends State<ConfirmarViajePage> {
         fechaHoraPickup: fechaUtc,
         preNav: nav.tab,
         preNavRaiz: nav.raiz,
+        abrirEnCursoAlConfirmar: true,
       );
     } on FirebaseException catch (e) {
       if (!mounted) return;

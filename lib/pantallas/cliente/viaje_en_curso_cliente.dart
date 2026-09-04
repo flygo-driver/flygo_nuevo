@@ -1,16 +1,11 @@
-// lib/pantallas/cliente/viaje_en_curso_cliente.dart
+﻿// lib/pantallas/cliente/viaje_en_curso_cliente.dart
 // ignore_for_file: avoid_print -- [VIAJE_ACTIVO] / [FINALIZAR]
 
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart'
-    show
-        FlutterErrorDetails,
-        TargetPlatform,
-        debugPrint,
-        defaultTargetPlatform,
-        kIsWeb;
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -27,24 +22,30 @@ import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/cliente_viaje_data_merge.dart';
+import 'package:flygo_nuevo/utils/cliente_viaje_estado_efectivo.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
+import 'package:flygo_nuevo/utils/viaje_navegacion_resolver.dart';
+import 'package:flygo_nuevo/widgets/multiparada_navegacion_tarjetas.dart';
 import 'package:flygo_nuevo/servicios/finance_config_service.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_pago_tarjeta_panel.dart';
 import 'package:flygo_nuevo/widgets/viaje_metodo_pago_selector.dart';
 import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 import 'package:flygo_nuevo/utils/release_build_flags.dart';
-import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_metodo_pago_viaje_ui.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
-import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/widgets/cliente_volver_rai_dialog.dart';
+import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
 import 'package:flygo_nuevo/servicios/error_auth_es.dart';
-import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
+import 'package:flygo_nuevo/utils/chat_viaje_nav.dart';
+import 'package:flygo_nuevo/widgets/viaje_chat_mapa_overlay.dart';
 import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_reopen_guard.dart';
 import 'package:flygo_nuevo/servicios/distancia_service.dart';
@@ -67,9 +68,12 @@ import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/widgets/cliente_pantalla_viaje_activo.dart';
 import 'package:flygo_nuevo/widgets/viaje_chat_mensajes_en_vivo.dart';
 import 'package:flygo_nuevo/utils/transferencia_recaudo_ui.dart';
-import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/utils/viaje_codigo_verificacion_helper.dart';
 import 'package:flygo_nuevo/widgets/viaje_flujo_orientacion.dart';
 import 'package:flygo_nuevo/widgets/rai_viaje_en_curso_ui.dart';
+
+part 'viaje_en_curso_cliente_pin_sync.dart';
+part 'viaje_en_curso_cliente_pin_widgets.dart';
 
 // ===== Helpers =====
 LatLng _latLng(double lat, double lon) => LatLng(lat, lon);
@@ -141,6 +145,14 @@ Widget _cargaLinealOscura({String? mensaje}) {
   );
 }
 
+bool _esPermisoDenegadoFirestore(Object? e) {
+  if (e is FirebaseException) {
+    return e.code == 'permission-denied';
+  }
+  final String s = e.toString().toLowerCase();
+  return s.contains('permission-denied') || s.contains('permission_denied');
+}
+
 String _s(Object? x) => x?.toString() ?? '';
 
 double _taxistaHueByEstado(String estado) {
@@ -184,12 +196,16 @@ String _viajeDocMapUiSig(DocumentSnapshot<Map<String, dynamic>> ds) {
   final bool codigoOk = d['codigoVerificado'] == true;
   final bool completado = d['completado'] == true;
   final int wp = (d['waypoints'] is List) ? (d['waypoints'] as List).length : 0;
-  final String codPin = (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '')
-      .toString();
+  final String codPin =
+      (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '').toString();
+  final bool clienteAbordo = d['clienteAbordo'] == true;
+  final dynamic exAb = d['extras'];
+  final bool clienteAbordoExtras = exAb is Map && exAb['clienteAbordo'] == true;
 
   return '${ds.id}|$est|${r4(dLat)}|${r4(dLon)}|${r4(d['latCliente'])}|${r4(d['lonCliente'])}|'
       '${r4(d['latDestino'])}|${r4(d['lonDestino'])}|$tid|$codigoOk|$completado|'
       '${d['metodoPago']}|${d['precio']}|$wp|$codPin|${d['multiparadaLegCompletadas']}|${d['multiparadaCompleta']}|'
+      '$clienteAbordo|$clienteAbordoExtras|'
       '${d['nombreTaxista']}|${d['telefonoTaxista']}|${d['telefono']}';
 }
 
@@ -207,7 +223,11 @@ class ViajeEnCursoCliente extends StatefulWidget {
 }
 
 class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+    with
+        TickerProviderStateMixin,
+        WidgetsBindingObserver,
+        _ViajeEnCursoClientePinSync,
+        _ViajeEnCursoClientePinWidgets {
   /// Pruebas en silla: solo debug/profile con define; nunca en Play Store.
   bool get _simCasa => ReleaseBuildFlags.simCasaEnabled;
 
@@ -226,11 +246,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   /// Último snapshot del viaje para no mostrar pantalla negra si el stream reconecta.
   DocumentSnapshot<Map<String, dynamic>>? _lastViajeUiCache;
 
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeDocSub;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _bolaPickupSub;
-  String? _bolaPickupWatchId;
-  Map<String, dynamic>? _bolaPickupDocData;
-  String _lastNotifiedState = '';
 
   /// Evita avisar dos veces al cliente que el conductor canceló (una por marca de tiempo).
   DateTime? _cancelacionTaxistaAvisada;
@@ -240,6 +255,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   /// Multiparada: destinos ya visitados (solo UI cliente; prefs por viaje).
   int _multiLegCompletadas = 0;
+  final Set<int> _clienteMultiNavLegIndices = <int>{};
+  bool _clienteOrigenMultiNavAbierto = false;
+  String? _clienteMultiNavViajeId;
   String? _multiNavLoadedForViajeId;
 
   /// Publica la posición del cliente en el documento del viaje (Firestore en vivo).
@@ -263,23 +281,97 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   static const String _kTaxistaAnimId = 'taxista';
   late final RaiLiveMarkerAnimator _taxistaAnim;
   late final RaiLiveDriverMapAnimator _poolDriverAnim;
+  Viaje? _viajeCamaraFollowCache;
+  String _estadoCamaraFollowCache = '';
 
   /// Cámara movida por código (no colapsar/expandir tarjeta como si fuera gesto del usuario).
   int _programmaticCameraDepth = 0;
   Timer? _mapGestureEndDebounce;
 
-  /// Evita animar el colapso del sheet más de una vez por viaje (espera conductor o viene al pickup).
-  String? _sheetCollapsedPickupForViajeId;
+  /// Última fase en la que se auto-expandió el sheet (permite re-expandir al cambiar fase).
+  String? _sheetAutoExpandFaseClave;
+
+  /// Última fase UI del sheet (pickup vs a bordo) para re-expandir al marcar abordo.
+  String? _sheetFaseUiViajeId;
+  bool _sheetFaseUiEsAbordo = false;
   final DraggableScrollableController _viajeSheetCtrl =
       DraggableScrollableController();
-  static const double _kViajeSheetMin = 0.22;
+  static const double _kViajeSheetMinNormal = 0.22;
+static const double _kViajeSheetMinMultiparada = 0.30;
+
   /// Panel inicial con conductor asignado / en ruta.
   static const double _kViajeSheetInitial = 0.52;
+
   /// Fase pickup (taxista viene al cliente): sheet bajo para ver más mapa.
-  static const double _kViajeSheetPickupCompact = 0.38;
+  static const double _kViajeSheetPickupCompact = 0.48;
+
+  /// A bordo + PIN: altura inicial para ver código sin pelear con el scroll.
+  static const double _kViajeSheetAbordoPin = 0.78;
+
+  /// Mínimo en abordo+PIN: evita tarjeta tan baja que el gesto quede atascado.
+  static const double _kViajeSheetMinAbordoPin = 0.40;
+
   /// Esperando que un taxista acepte: más alto para que el mensaje y acciones se lean bien.
   static const double _kViajeSheetEsperaConductor = 0.56;
+
+  static const Duration _kViajeSheetSnapDuration =
+      Duration(milliseconds: 360);
+
+  static const Duration _kViajeSheetAnimDuration = _kViajeSheetSnapDuration;
+  static const Curve _kViajeSheetAnimCurve = Curves.easeOutCubic;
+
+  /// Snap graduado: varios escalones para que el arrastre se sienta suave.
+  static List<double> _snapSizesViajeCliente({
+    required double minSize,
+    required List<double> hitos,
+    double max = 0.94,
+  }) {
+    final Set<double> unicos = <double>{minSize, max};
+    for (final double h in hitos) {
+      unicos.add(h.clamp(minSize, max));
+    }
+    final List<double> orden = unicos.toList()..sort();
+    final List<double> graduado = <double>[];
+    for (int i = 0; i < orden.length; i++) {
+      graduado.add(orden[i]);
+      if (i < orden.length - 1) {
+        final double a = orden[i];
+        final double b = orden[i + 1];
+        if (b - a > 0.11) {
+          graduado.add(double.parse(((a + b) / 2).toStringAsFixed(3)));
+        }
+      }
+    }
+    return graduado.toSet().toList()..sort();
+  }
+
+  static const int _kSheetExpandMaxReintentos = 60;
   double _sheetExpandedTarget = _kViajeSheetInitial;
+
+  /// Si el controlador no estaba listo, reintentar en el próximo frame.
+  double? _sheetExpandPendienteTarget;
+
+  /// Último gesto manual del usuario sobre el sheet (evita pelear con auto-expand).
+  DateTime? _sheetUltimoGestUsuario;
+  double? _sheetTamanoPrevio;
+
+  /// Touch/scroll activo: bloquea animateTo programático (causa #1 de touch muerto en device).
+  bool _sheetPointerActivo = false;
+  bool _sheetScrollArrastrando = false;
+  DateTime? _sheetUltimaRecuperacionAtascado;
+  String? _sheetUltimoExpandSigProgramado;
+
+  /// El cliente colapsó el sheet en abordo+PIN: no forzar re-expansión automática.
+  bool _sheetAbordoColapsoUsuario = false;
+
+  /// Evita re-forzar expand al mismo PIN en cada rebuild.
+  String? _sheetPinAbordoExpandSig;
+
+  /// Scroll interno del sheet (compartido con DraggableScrollableSheet).
+  ScrollController? _viajeSheetScrollCtrl;
+
+  /// Cache de fase abordo+PIN para callbacks del mapa (se actualiza en build).
+  bool _faseAbordoPinUiCache = false;
 
   /// ETA taxista → pickup (Directions con tráfico, con fallback).
   String? _pickupEtaTitulo;
@@ -297,6 +389,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   bool _subiendoComprobanteTransfer = false;
   bool _cancelandoViajeCliente = false;
   bool _yendoAlInicio = false;
+  bool _salidaAutoSinViajeDisparada = false;
   bool _clienteNavDestinoUsado = false;
   int _clienteNavOrientacionLegDismissed = -1;
 
@@ -309,12 +402,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   /// Último viaje activo visto (para pantalla de cierre cuando `viajeActivoId` ya se limpió en servidor).
   String _lastNonEmptyViajeActivoId = '';
+  String _bootstrapViajeIntentadoId = '';
+  int _bootstrapViajeUltimoIntentoMs = 0;
+  String _viajeDatosOfflineId = '';
+  Map<String, dynamic>? _viajeDatosOffline;
   DocumentSnapshot<Map<String, dynamic>>? _viajeCierreDocSnap;
   String? _viajeCierreFetchKey;
 
   /// Evita abrir dos veces el flujo post-viaje para el mismo id.
   String? _navPostViajeParaId;
   bool _abriendoFlujoPostViaje = false;
+  bool _postViajeRequiereAccionManual = false;
+  String? _postViajeManualViajeId;
+  Map<String, dynamic>? _postViajeManualSemilla;
+  Timer? _postViajeTimeoutTimer;
 
   /// Tras cancelar desde esta pantalla: no abrir factura/post-viaje (solo completados).
   String? _viajeIdCanceladoPorCliente;
@@ -336,14 +437,26 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   DateTime? _lastClienteNavResumeSnackAt;
   DateTime? _lastClienteGpsSistemaSnackAt;
 
-  /// Mapa nativo: montar tras el 1.er frame. Si falla (ErrorWidget), UI sin mapa.
+  /// Tras retomar/remontar overlay, ignorar PopScope espurio un instante.
+  bool _suprimirPopScopeAutomatico = true;
+  Timer? _popScopeSuprimidoTimer;
+
+  /// Mapa nativo: montar tras el 1.er frame. Si falla (ErrorWidget), reintento auto.
   bool _mapaPermitido = false;
   bool _mapaDesactivadoPorError = false;
-  ErrorWidgetBuilder? _errorBuilderAnterior;
+  Timer? _mapaAutoRetryTimer;
+  int _mapaAutoRetryIntentos = 0;
+  static const int _kMapaAutoRetryMax = 6;
 
-  @override
+   @override
   void initState() {
     super.initState();
+    final String vidInicial =
+        ActiveTripService.resolverViajeIdClienteParaPausa();
+    if (vidInicial.isNotEmpty) {
+      _lastNonEmptyViajeActivoId = vidInicial;
+      ActiveTripService.registrarViajeOperativoCliente(vidInicial);
+    }
     PoolTimbreSessionGuard.activarSesionPasajero();
     NotificationService.I.suprimirTimbrePoolCliente();
     WidgetsBinding.instance.addObserver(this);
@@ -357,8 +470,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     )..repeat();
     _taxistaAnim = RaiLiveMarkerAnimator(
       vsync: this,
+      duration: const Duration(milliseconds: 1100),
       onTick: () {
-        if (mounted) setState(() {});
+        if (!mounted) return;
+        setState(() {});
+        _actualizarCamaraSeguimientoAnimado();
       },
     );
     _poolDriverAnim = RaiLiveDriverMapAnimator(vsync: this)
@@ -368,50 +484,75 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
       if (mounted) setState(() {});
     }));
-    // Si un hijo (p. ej. GoogleMap) tira, no quedarse en «No pudimos cargar…»:
-    // el próximo frame entra sin mapa pero con teléfono/chat.
-    _errorBuilderAnterior = ErrorWidget.builder;
-    ErrorWidget.builder = (FlutterErrorDetails details) {
-      debugPrint(
-        '[VIAJE_ACTIVO] cliente ErrorWidget: ${details.exceptionAsString()}',
-      );
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (_mapaDesactivadoPorError) return;
-        setState(() {
-          _mapaDesactivadoPorError = true;
-          _mapaPermitido = false;
-        });
-      });
-      return const ColoredBox(
-        color: Color(0xFF0A0A0A),
-        child: Center(
-          child: SizedBox(
-            width: 32,
-            height: 32,
-            child: CircularProgressIndicator(
-              strokeWidth: 2.5,
-              color: Colors.greenAccent,
-            ),
-          ),
-        ),
-      );
-    };
     _enableMyLocation();
     _lastNotifiedState = '';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // Mapa entra al siguiente frame (evita setState en build). Si el shield
       // forzó sin mapa o ya falló, la ficha del viaje sigue visible.
-      if (ViajeSinMapaScope.of(context) || _mapaDesactivadoPorError) {
-        setState(() {
-          _mapaDesactivadoPorError = true;
-          _mapaPermitido = false;
-        });
+      if (ViajeSinMapaScope.of(context)) {
+        _marcarMapaFallido(programarReintento: true);
       } else {
-        setState(() => _mapaPermitido = true);
+        setState(() {
+          _mapaPermitido = true;
+          _mapaDesactivadoPorError = false;
+          _mapaAutoRetryIntentos = 0;
+        });
       }
       unawaited(_verificarViajeTerminadoAlAbrirCliente());
+      unawaited(_bootstrapViajeClienteAlAbrir());
+    });
+
+    _viajeSheetCtrl.addListener(_onViajeSheetUsuarioGest);
+
+    ActiveTripService.markClienteTripScreenMounted();
+    final bool retomarActivo = ActiveTripService.retomarClienteEnCurso;
+    _suprimirPopScopeAutomatico = true;
+    _popScopeSuprimidoTimer = Timer(
+      Duration(milliseconds: retomarActivo ? 12000 : 900),
+      () {
+      if (!mounted) return;
+      setState(() => _suprimirPopScopeAutomatico = false);
+    },
+    );
+  }
+
+  void _marcarMapaFallido({bool programarReintento = true}) {
+    if (!mounted) return;
+    setState(() {
+      _mapaDesactivadoPorError = true;
+      _mapaPermitido = false;
+    });
+    if (programarReintento) {
+      _programarReintentoMapaAutomatico();
+    }
+  }
+
+  void _programarReintentoMapaAutomatico({
+    Duration delay = const Duration(milliseconds: 1200),
+    bool resetIntentos = false,
+  }) {
+    if (!mounted) return;
+    if (resetIntentos) _mapaAutoRetryIntentos = 0;
+    if (_mapaAutoRetryIntentos >= _kMapaAutoRetryMax) return;
+    _mapaAutoRetryTimer?.cancel();
+    _mapaAutoRetryTimer = Timer(delay, () {
+      if (!mounted) return;
+      _mapaAutoRetryIntentos++;
+      setState(() {
+        _mapaDesactivadoPorError = false;
+        _mapaPermitido = true;
+      });
+    });
+  }
+
+  void _reintentarMapaViajeManual() {
+    _mapaAutoRetryTimer?.cancel();
+    _mapaAutoRetryIntentos = 0;
+    if (!mounted) return;
+    setState(() {
+      _mapaDesactivadoPorError = false;
+      _mapaPermitido = true;
     });
   }
 
@@ -420,33 +561,86 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (u == null || !mounted) return;
     print('[VIAJE_ACTIVO] cliente en_curso init: verificar si viaje ya cerró');
     try {
+      String resolvedViajeId =
+          ActiveTripService.resolverViajeIdClienteParaPausa();
+      if (resolvedViajeId.isEmpty) {
+        resolvedViajeId = _lastNonEmptyViajeActivoId.trim();
+      }
+
       final us = await FirebaseFirestore.instance
           .collection('usuarios')
           .doc(u.uid)
           .get(const GetOptions(source: Source.server));
-      String resolvedViajeId =
+      final String vidUsuario =
           (us.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (resolvedViajeId.isEmpty) {
+        resolvedViajeId = vidUsuario;
+      }
+      if (resolvedViajeId.isNotEmpty) {
+        _lastNonEmptyViajeActivoId = resolvedViajeId;
+        ActiveTripService.registrarViajeOperativoCliente(resolvedViajeId);
+      }
+
       Map<String, dynamic>? d;
+      bool lecturaDenegada = false;
 
       if (resolvedViajeId.isNotEmpty) {
-        final vs = await FirebaseFirestore.instance
-            .collection('viajes')
-            .doc(resolvedViajeId)
-            .get(const GetOptions(source: Source.server));
-        if (vs.exists) d = vs.data();
-      }
-      if (d == null) {
-        final snap = await ViajesRepo.getViajeActivoParaUsuario(u.uid);
-        if (snap != null && snap.exists) {
-          resolvedViajeId = snap.id;
+        try {
           final vs = await FirebaseFirestore.instance
               .collection('viajes')
               .doc(resolvedViajeId)
               .get(const GetOptions(source: Source.server));
           if (vs.exists) d = vs.data();
+        } on FirebaseException catch (e) {
+          if (_esPermisoDenegadoFirestore(e)) lecturaDenegada = true;
+        } catch (e) {
+          if (_esPermisoDenegadoFirestore(e)) lecturaDenegada = true;
         }
       }
-      if (d == null || !mounted || resolvedViajeId.isEmpty) return;
+
+      if (d == null && resolvedViajeId.isNotEmpty && !lecturaDenegada) {
+        for (int i = 0; i < 3; i++) {
+          await Future<void>.delayed(Duration(milliseconds: 350 * (i + 1)));
+          if (!mounted) return;
+          try {
+            final DocumentSnapshot<Map<String, dynamic>> retry =
+                await FirebaseFirestore.instance
+                    .collection('viajes')
+                    .doc(resolvedViajeId)
+                    .get(const GetOptions(source: Source.server));
+            if (retry.exists) {
+              d = retry.data();
+              break;
+            }
+          } catch (e) {
+            if (_esPermisoDenegadoFirestore(e)) {
+              lecturaDenegada = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (lecturaDenegada) {
+        print(
+          '[VIAJE_ACTIVO] cliente init: lectura viaje limitada, esperar stream',
+        );
+        return;
+      }
+
+      if (d == null || !mounted || resolvedViajeId.isEmpty) {
+        if (mounted &&
+            resolvedViajeId.isNotEmpty &&
+            d == null &&
+            !_yendoAlInicio) {
+          unawaited(_salirTrasViajeDesaparecido(
+            viajeId: resolvedViajeId,
+            uid: u.uid,
+            origen: 'initDocInexistente',
+          ));
+        }
+        return;
+      }
 
       _manejarViajeCerradoSiCorresponde(
         viajeId: resolvedViajeId,
@@ -455,71 +649,24 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         origen: 'init',
       );
     } catch (e) {
+      if (_esPermisoDenegadoFirestore(e)) {
+        print(
+          '[VIAJE_ACTIVO] cliente init: usuarios/viaje limitado, esperar stream',
+        );
+        return;
+      }
       print('[VIAJE_ACTIVO] cliente init check error: $e');
     }
   }
 
-  Future<void> _refrescarViajeActivoClienteResume() async {
-    final u = FirebaseAuth.instance.currentUser;
-    if (u == null || !mounted) return;
-    print('[VIAJE_ACTIVO] cliente resumed: refresh viaje (Source.server)');
-    try {
-      String resolvedViajeId = '';
-      Map<String, dynamic>? d;
 
-      final us = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .doc(u.uid)
-          .get(const GetOptions(source: Source.server));
-      resolvedViajeId =
-          (us.data()?['viajeActivoId'] ?? '').toString().trim();
 
-      if (resolvedViajeId.isNotEmpty) {
-        final vs = await FirebaseFirestore.instance
-            .collection('viajes')
-            .doc(resolvedViajeId)
-            .get(const GetOptions(source: Source.server));
-        if (vs.exists) d = vs.data();
-      }
-      if (d == null) {
-        final snap = await ViajesRepo.getViajeActivoParaUsuario(u.uid);
-        if (snap != null && snap.exists) {
-          resolvedViajeId = snap.id;
-          final vs = await FirebaseFirestore.instance
-              .collection('viajes')
-              .doc(resolvedViajeId)
-              .get(const GetOptions(source: Source.server));
-          if (vs.exists) d = vs.data();
-        }
-      }
-
-      if (d == null || resolvedViajeId.isEmpty) {
-        if (mounted) setState(() {});
-        return;
-      }
-
-      _manejarViajeCerradoSiCorresponde(
-        viajeId: resolvedViajeId,
-        uid: u.uid,
-        data: d,
-        origen: 'resume',
-      );
-      if (mounted) setState(() {});
-    } catch (e) {
-      print('[VIAJE_ACTIVO] cliente resume refresh error: $e');
-    }
-  }
-
-  @override
+    @override
   void dispose() {
-    if (_errorBuilderAnterior != null) {
-      ErrorWidget.builder = _errorBuilderAnterior!;
-      _errorBuilderAnterior = null;
-    }
+    _mapaAutoRetryTimer?.cancel();
     _map?.dispose();
     _routeDebounce?.cancel();
     _disposeDocWatch();
-    _disposeBolaPickupWatch();
     _stopClienteUbicacionEnViaje();
     _mensajeCercaniaTimer?.cancel();
     _nearbyDriversSession?.dispose();
@@ -528,13 +675,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _progresoBrilloCtrl.dispose();
     _pickupEtaDebounce?.cancel();
     _mapGestureEndDebounce?.cancel();
+    _viajeSheetCtrl.removeListener(_onViajeSheetUsuarioGest);
     _viajeSheetCtrl.dispose();
     _taxistaAnim.dispose();
     _poolDriverAnim.dispose();
     _stopTurismoReasignacionTimer();
+    _stopClienteViajeSyncPulse();
+    _postViajeTimeoutTimer?.cancel();
+    _popScopeSuprimidoTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+
+    ActiveTripService.markClienteTripScreenUnmounted();
     super.dispose();
   }
+
 
   void _syncTaxistaAnimador(Viaje v) {
     if (v.uidTaxista.isEmpty || !_isValidCoord(v.latTaxista, v.lonTaxista)) {
@@ -566,34 +720,55 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     return _taxistaAnim.bearing(_kTaxistaAnimId, fallback: _bearingTaxista);
   }
 
+  bool _clienteEnFlujoPostViajeOCompletado() {
+    if (_abriendoFlujoPostViaje ||
+        _navPostViajeParaId != null ||
+        _postViajeFlujoIniciadoParaViajeId.isNotEmpty) {
+      return true;
+    }
+    final Map<String, dynamic>? cache = _lastViajeUiCache?.data();
+    if (cache != null && _viajeClienteCompletadoParaPostViaje(cache)) {
+      return true;
+    }
+    return false;
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (state != AppLifecycleState.resumed) return;
-    print('[VIAJE_ACTIVO] cliente lifecycle resumed');
-    // resumed: sin Geolocator.requestPermission. Ubicación en viaje vía readNoRequest en _ensureClienteUbicacionEnViaje / _enableMyLocation.
-    _clienteViajeUbicacionPermisoDenegadoViajeId = null;
-    unawaited(_refrescarViajeActivoClienteResume());
-    final now = DateTime.now();
-    if (_lastClienteNavResumeSnackAt != null &&
-        now.difference(_lastClienteNavResumeSnackAt!) <
-            const Duration(seconds: 6)) {
+    if (state == AppLifecycleState.resumed) {
+      print('[VIAJE_ACTIVO] cliente lifecycle resumed');
+      ActiveTripService.mantenerOverlayViajeEnShell(
+        NavigationService.kOverlayClienteViajeActivo,
+      );
+      if (_clienteEnFlujoPostViajeOCompletado()) {
+        ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+        return;
+      }
+      if (_mapaDesactivadoPorError || !_mapaPermitido) {
+        _programarReintentoMapaAutomatico(
+          delay: const Duration(milliseconds: 400),
+          resetIntentos: true,
+        );
+      }
+      _clienteViajeUbicacionPermisoDenegadoViajeId = null;
+      // Al volver de la app taxista: cache→server y PIN sin salir/entrar.
+      unawaited(_refrescarViajeActivoClienteResume());
       return;
     }
-    _lastClienteNavResumeSnackAt = now;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Seguís en tu viaje RAI: el mapa, el conductor y el estado se actualizan aquí. '
-            'Podés volver a abrir Waze o Maps cuando quieras.',
-          ),
-          duration: Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    });
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      // Mientras cambias a la app taxista, el pulso sigue activo si el SO lo permite.
+      final String? vid = _syncPulseViajeId;
+      if (vid != null && vid.isNotEmpty) {
+        ActiveTripService.registrarViajeOperativoCliente(vid);
+        final String? uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null && uid.trim().isNotEmpty) {
+          unawaited(RaiLocalReadCache.rememberActiveTripId(uid, vid));
+        }
+        _startClienteViajeSyncPulse(vid, forceRestart: true, rapido: true);
+      }
+    }
   }
 
   void _stopClienteUbicacionEnViaje() {
@@ -702,11 +877,21 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   void _maybeAnimarCamaraAlTaxista(Viaje v, String estadoBase) {
+    _viajeCamaraFollowCache = v;
+    _estadoCamaraFollowCache = estadoBase;
+    _ejecutarSeguimientoCamaraTaxista(v, estadoBase);
+  }
+
+  void _actualizarCamaraSeguimientoAnimado() {
+    final Viaje? v = _viajeCamaraFollowCache;
+    if (v == null) return;
+    _ejecutarSeguimientoCamaraTaxista(v, _estadoCamaraFollowCache);
+  }
+
+  void _ejecutarSeguimientoCamaraTaxista(Viaje v, String estadoBase) {
     if (!_seguirTaxistaCamara) return;
     if (!_isValidCoord(v.latTaxista, v.lonTaxista)) return;
     if (v.uidTaxista.isEmpty) return;
-    // Pickup + trayecto al destino: el pasajero puede seguir al conductor en el mapa.
-    // Incluye `a_bordo` con código OK (conductor ya puede ir al destino antes de que el estado pase a `en_curso`).
     if (!(estadoBase == EstadosViaje.aceptado ||
         estadoBase == EstadosViaje.enCaminoPickup ||
         estadoBase == EstadosViaje.enCurso ||
@@ -717,32 +902,58 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final DateTime now = DateTime.now();
     if (_ultimoSeguimientoTaxistaMs != null &&
         now.difference(_ultimoSeguimientoTaxistaMs!) <
-            const Duration(milliseconds: 850)) {
+            const Duration(milliseconds: 520)) {
       return;
     }
+
+    _syncTaxistaAnimador(v);
+    final LatLng taxiPos = _posTaxistaAnimada(v);
 
     if (_ultimoSeguimientoTaxLat != null && _ultimoSeguimientoTaxLon != null) {
       final double dKm = _haversineKm(
         _ultimoSeguimientoTaxLat!,
         _ultimoSeguimientoTaxLon!,
-        v.latTaxista,
-        v.lonTaxista,
+        taxiPos.latitude,
+        taxiPos.longitude,
       );
-      if (dKm < 0.004) {
+      if (dKm < 0.002) {
         return;
       }
     }
 
     _ultimoSeguimientoTaxistaMs = now;
-    _ultimoSeguimientoTaxLat = v.latTaxista;
-    _ultimoSeguimientoTaxLon = v.lonTaxista;
-
-    _syncTaxistaAnimador(v);
-    final LatLng taxiPos = _posTaxistaAnimada(v);
+    _ultimoSeguimientoTaxLat = taxiPos.latitude;
+    _ultimoSeguimientoTaxLon = taxiPos.longitude;
 
     final GoogleMapController? c = _map;
     if (c == null) return;
+
+    final List<LatLng> framePts = <LatLng>[taxiPos];
+    final bool haciaDestino = estadoBase == EstadosViaje.enCurso ||
+        (estadoBase == EstadosViaje.aBordo && v.codigoVerificado);
+    if (haciaDestino && _isValidCoord(v.latDestino, v.lonDestino)) {
+      framePts.add(_latLng(v.latDestino, v.lonDestino));
+    } else if (_isValidCoord(v.latCliente, v.lonCliente)) {
+      framePts.add(_latLng(v.latCliente, v.lonCliente));
+    }
+
     _programmaticCameraDepth++;
+    if (framePts.length >= 2) {
+      final LatLngBounds bounds = RaiMapPresentation.boundsFromPoints(framePts);
+      final double padding = haciaDestino ? 108.0 : 124.0;
+      unawaited(
+        RaiMapPresentation.fitBounds(
+          c,
+          bounds,
+          padding: padding,
+          maxZoom: haciaDestino ? 16.2 : 16.0,
+        ).then((_) {}, onError: (_) {
+          if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
+        }),
+      );
+      return;
+    }
+
     c
         .animateCamera(
       CameraUpdate.newCameraPosition(
@@ -750,7 +961,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           target: taxiPos,
           zoom: RaiMapPresentation.followZoomDriver,
           bearing: _bearingTaxistaAnimado(),
-          tilt: estadoBase == EstadosViaje.enCurso ? 0 : 28,
+          tilt: haciaDestino ? 0 : 28,
         ),
       ),
     )
@@ -759,22 +970,669 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     });
   }
 
-  void _colapsarSheetPorTapMapa() {
+  void _onViajeSheetUsuarioGest() {
     if (!_viajeSheetCtrl.isAttached) return;
-    _viajeSheetCtrl.animateTo(
-      _kViajeSheetMin,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+    final double size = _viajeSheetCtrl.size;
+    final double? prev = _sheetTamanoPrevio;
+    _sheetTamanoPrevio = size;
+    if (prev != null && (size - prev).abs() > 0.008) {
+      _sheetUltimoGestUsuario = DateTime.now();
+      if (_sheetFaseUiEsAbordo) {
+        _sheetAbordoColapsoUsuario = size < _kViajeSheetAbordoPin - 0.06;
+      }
+    }
+  }
+
+  /// Colapso por tap en mapa: posición compacta (~48%), no el mínimo absoluto.
+  double _targetColapsoSheetPorTapMapa() {
+    if (_sheetExpandedTarget >= _kViajeSheetInitial - 0.02) {
+      return _kViajeSheetInitial;
+    }
+    if (_sheetExpandedTarget >= _kViajeSheetEsperaConductor - 0.02) {
+      return _kViajeSheetEsperaConductor;
+    }
+    return _kViajeSheetPickupCompact;
+  }
+
+  bool _sheetUsuarioInteractuandoAhora() {
+    return _sheetPointerActivo || _sheetScrollArrastrando;
+  }
+
+  void _finalizarInteraccionSheetUsuario() {
+    _sheetPointerActivo = false;
+    _sheetScrollArrastrando = false;
+    if (_sheetFaseUiEsAbordo &&
+        _viajeSheetCtrl.isAttached &&
+        _viajeSheetCtrl.size < _kViajeSheetAbordoPin - 0.06) {
+      _sheetAbordoColapsoUsuario = true;
+      _sheetExpandPendienteTarget = null;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_usuarioAcabaDeAjustarSheet() || _sheetAbordoColapsoUsuario) {
+        _sheetExpandPendienteTarget = null;
+        return;
+      }
+      _procesarSheetExpandPendiente();
+    });
+  }
+
+  bool _puedeAnimarSheetProgramatico({required bool forzar}) {
+    if (_sheetUsuarioInteractuandoAhora()) return false;
+    if (!forzar && _usuarioAcabaDeAjustarSheet()) return false;
+    return true;
+  }
+
+  bool _usuarioAcabaDeAjustarSheet() {
+    final DateTime? t = _sheetUltimoGestUsuario;
+    if (t == null) return false;
+    return DateTime.now().difference(t) < const Duration(seconds: 10);
+  }
+
+  void _colapsarSheetPorTapMapa({double? target}) {
+    final DraggableScrollableController ctrl = _sheetCtrlActivoCliente();
+    if (!ctrl.isAttached) return;
+    if (_sheetUsuarioInteractuandoAhora()) return;
+    ctrl.animateTo(
+      target ?? _targetColapsoSheetPorTapMapa(),
+      duration: _kViajeSheetAnimDuration,
+      curve: _kViajeSheetAnimCurve,
     );
   }
 
-  void _expandirSheetTrasMapaInteract() {
-    if (!_viajeSheetCtrl.isAttached) return;
-    _viajeSheetCtrl.animateTo(
-      _sheetExpandedTarget,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
+  DraggableScrollableController _sheetCtrlActivoCliente() => _viajeSheetCtrl;
+
+  /// Al mostrar PIN a bordo: expandir tarjeta y resetear scroll (zona fija arriba).
+  void prepararSheetPinAbordoVisible({
+    required String viajeId,
+    required String pin,
+    bool forzar = true,
+  }) {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+    final String sig = '$id|${pin.trim()}';
+    if (_sheetPinAbordoExpandSig == sig && !forzar) return;
+    _sheetPinAbordoExpandSig = sig;
+    _sheetAbordoColapsoUsuario = false;
+    _sheetUltimoGestUsuario = null;
+    _sheetExpandedTarget = _kViajeSheetAbordoPin;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _solicitarExpandirSheetCliente(
+        target: _kViajeSheetAbordoPin,
+        forzar: true,
+      );
+      final ScrollController? sc = _viajeSheetScrollCtrl;
+      if (sc != null && sc.hasClients) {
+        sc.jumpTo(0);
+      }
+    });
+  }
+
+  void _solicitarExpandirSheetCliente({
+    required double target,
+    bool forzar = false,
+    int intento = 0,
+  }) {
+    if (_sheetFaseUiEsAbordo &&
+        _sheetAbordoColapsoUsuario &&
+        !forzar &&
+        target >= _kViajeSheetAbordoPin - 0.02) {
+      return;
+    }
+    _sheetExpandedTarget = target;
+    if (!_puedeAnimarSheetProgramatico(forzar: forzar)) {
+      _sheetExpandPendienteTarget = target;
+      return;
+    }
+
+    final DraggableScrollableController ctrl = _sheetCtrlActivoCliente();
+
+    if (!ctrl.isAttached) {
+      _sheetExpandPendienteTarget = target;
+      if (intento >= _kSheetExpandMaxReintentos) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _solicitarExpandirSheetCliente(
+            target: target,
+            forzar: forzar,
+            intento: intento + 1,
+          );
+        }
+      });
+      return;
+    }
+
+    _sheetExpandPendienteTarget = null;
+
+    if (!forzar) {
+      final double actual = ctrl.size;
+      if ((actual - target).abs() < 0.02) return;
+    }
+
+    ctrl.animateTo(
+      target,
+      duration: _kViajeSheetAnimDuration,
+      curve: _kViajeSheetAnimCurve,
     );
+  }
+
+  void _procesarSheetExpandPendiente() {
+    if (_sheetUsuarioInteractuandoAhora()) return;
+    if (_usuarioAcabaDeAjustarSheet() || _sheetAbordoColapsoUsuario) {
+      _sheetExpandPendienteTarget = null;
+      return;
+    }
+    final double? pendiente = _sheetExpandPendienteTarget;
+    if (pendiente == null) return;
+    _solicitarExpandirSheetCliente(target: pendiente, forzar: false);
+  }
+
+  /// Re-expande tras eventos (taxista más cerca, ETA) — con debounce para no pelear con touch.
+  void _intentarRecuperarSheetTrasEvento({bool forzar = false}) {
+    if (_sheetFaseUiEsAbordo && _sheetAbordoColapsoUsuario && !forzar) return;
+    if (!forzar && _usuarioAcabaDeAjustarSheet()) return;
+    if (_sheetUsuarioInteractuandoAhora()) return;
+    final DateTime now = DateTime.now();
+    if (!forzar &&
+        _sheetUltimaRecuperacionAtascado != null &&
+        now.difference(_sheetUltimaRecuperacionAtascado!) <
+            const Duration(seconds: 4)) {
+      return;
+    }
+    final double target = _sheetExpandedTarget;
+    final DraggableScrollableController ctrl = _sheetCtrlActivoCliente();
+    if (!ctrl.isAttached) {
+      _sheetExpandPendienteTarget = target;
+      return;
+    }
+    if (ctrl.size < target - 0.035) {
+      _sheetUltimaRecuperacionAtascado = now;
+      _solicitarExpandirSheetCliente(target: target, forzar: false);
+    }
+  }
+
+  double? _targetSheetPorFaseCliente({
+    required Viaje v,
+    required String estadoBase,
+    required bool faseAbordoPin,
+    required bool codigoVerificado,
+    required bool faseEnRuta,
+  }) {
+    final bool esperandoPool = !v.esTurismo &&
+        v.uidTaxista.isEmpty &&
+        (estadoBase == EstadosViaje.pendiente ||
+            estadoBase == EstadosViaje.pendientePago);
+    final bool turismoSinConductor = v.esTurismo &&
+        v.uidTaxista.isEmpty &&
+        !widget.delegarEsperaTurismoAlRouter;
+    final bool fasePickup = v.uidTaxista.isNotEmpty &&
+        !faseAbordoPin &&
+        !codigoVerificado &&
+        (estadoBase == EstadosViaje.aceptado ||
+            estadoBase == EstadosViaje.enCaminoPickup);
+
+    if (faseAbordoPin && !codigoVerificado) {
+      return _kViajeSheetAbordoPin;
+    }
+    if (faseEnRuta) {
+      return _kViajeSheetInitial;
+    }
+    if (fasePickup) {
+      return _kViajeSheetPickupCompact;
+    }
+    if (esperandoPool || turismoSinConductor) {
+      return _kViajeSheetEsperaConductor;
+    }
+    return null;
+  }
+
+  String? _claveFaseSheetCliente({
+    required String viajeId,
+    required bool faseAbordoPin,
+    required bool codigoVerificado,
+    required bool faseEnRuta,
+    required bool fasePickup,
+    required bool esperandoConductor,
+  }) {
+    if (faseAbordoPin && !codigoVerificado) return '$viajeId|abordo';
+    if (faseEnRuta) return '$viajeId|en_curso';
+    if (fasePickup) return '$viajeId|pickup';
+    if (esperandoConductor) return '$viajeId|espera';
+    return null;
+  }
+
+  bool _sheetClienteAtascado(double target) {
+    if (!_viajeSheetCtrl.isAttached) return _sheetExpandPendienteTarget != null;
+    final double size = _viajeSheetCtrl.size;
+    return size < target - 0.035 || size <= _kViajeSheetMinNormal + 0.03;
+  }
+
+  void _expandirSheetTrasMapaInteract({int intento = 0, bool forzar = false}) {
+    _solicitarExpandirSheetCliente(
+      target: _sheetExpandedTarget,
+      forzar: forzar,
+      intento: intento,
+    );
+  }
+
+  /// Auto-expande la tarjeta al cambiar de fase (espera → pickup → abordo → en curso)
+  /// o si quedó atascada bajo el objetivo.
+  void _maybeAutoExpandirSheetPorFaseCliente({
+    required Viaje v,
+    required String estadoBase,
+    required bool faseAbordoPin,
+    required bool codigoVerificado,
+    required bool faseEnRuta,
+    required bool fasePickupConductor,
+    required bool esperandoConductor,
+  }) {
+    final double? target = _targetSheetPorFaseCliente(
+      v: v,
+      estadoBase: estadoBase,
+      faseAbordoPin: faseAbordoPin,
+      codigoVerificado: codigoVerificado,
+      faseEnRuta: faseEnRuta,
+    );
+    final String? faseClave = _claveFaseSheetCliente(
+      viajeId: v.id,
+      faseAbordoPin: faseAbordoPin,
+      codigoVerificado: codigoVerificado,
+      faseEnRuta: faseEnRuta,
+      fasePickup: fasePickupConductor,
+      esperandoConductor: esperandoConductor,
+    );
+
+    if (target == null || faseClave == null) return;
+
+    _sheetExpandedTarget = target;
+
+    final bool faseCambio = _sheetAutoExpandFaseClave != faseClave;
+    if (faseAbordoPin && faseCambio) {
+      _sheetAbordoColapsoUsuario = false;
+    }
+
+    final bool sheetAtascado = _sheetClienteAtascado(target);
+
+    if (!faseCambio && !sheetAtascado) return;
+    if (!faseCambio && _usuarioAcabaDeAjustarSheet()) return;
+    if (sheetAtascado && !faseCambio) {
+      final DateTime now = DateTime.now();
+      if (_sheetUltimaRecuperacionAtascado != null &&
+          now.difference(_sheetUltimaRecuperacionAtascado!) <
+              const Duration(seconds: 3)) {
+        return;
+      }
+      _sheetUltimaRecuperacionAtascado = now;
+    }
+
+    _sheetAutoExpandFaseClave = faseClave;
+    _sheetFaseUiViajeId = v.id;
+    _sheetFaseUiEsAbordo = faseAbordoPin;
+
+    // Abordo+PIN: forzar expand al entrar; resto solo en cambio de fase.
+    _solicitarExpandirSheetCliente(
+      target: target,
+      forzar: faseCambio || (faseAbordoPin && !codigoVerificado),
+    );
+
+    if (fasePickupConductor &&
+        faseCambio &&
+        _isValidCoord(v.latTaxista, v.lonTaxista) &&
+        !_seguirTaxistaCamara) {
+      setState(() => _seguirTaxistaCamara = true);
+    }
+  }
+
+
+  List<Widget> _buildClienteAbordoSheetBodyChildren({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoBase,
+    required String estadoEfectivo,
+    required bool panelConductorAsignado,
+    required bool mostrarCodigoCliente,
+    required bool codigoVerificado,
+    required String codigoVerificacion,
+    required bool mostrarBotonTocaPinGrande,
+    bool pinEnZonaFija = false,
+  }) {
+    final List<Widget> pagoYDetalles = <Widget>[
+      _wrapSelectorMetodoPago(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoBase,
+      ),
+      if (_mostrarAvisoTarjetaPreAbordo(v, estadoBase, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.deepPurpleAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Text(
+              PagoTarjetaClienteGate.bloqueado
+                  ? 'Pago con tarjeta (en desarrollo): cuando subas al vehículo y verifiques el código '
+                      'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.'
+                  : 'Pago con tarjeta: cuando subas al vehículo y verifiques el código '
+                      'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      if (_mostrarAvisoTransferenciaPreAbordo(v, estadoBase, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.amberAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: const Text(
+              'Pago por transferencia: cuando subas al vehículo verás '
+              'la cuenta del conductor para transferir. Al finalizar el viaje '
+              'también recibirás el comprobante oficial con los mismos datos.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      if (_mostrarDatosTransferenciaCliente(v, estadoBase, data)) ...<Widget>[
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10231A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.greenAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: const Text(
+              'Ya estás a bordo o en camino al destino. '
+              'Transferí a la cuenta del conductor abajo y conservá el comprobante. '
+              'Al cerrar el viaje verás la factura oficial.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+        _buildDatosBancarios(
+          v,
+          _uidTaxistaDelViaje(v, data),
+          v.precio,
+          data,
+        ),
+        const SizedBox(height: 16),
+      ],
+      if (_mostrarPagoTarjetaCliente(
+        v,
+        estadoBase,
+        data,
+        codigoVerificado: codigoVerificado,
+      )) ...<Widget>[
+        const SizedBox(height: 12),
+        RaiPagoTarjetaPanel(
+          viajeId: v.id,
+          viajeData: data,
+          montoRd: v.precio,
+          fondoOscuro: true,
+          role: 'cliente',
+          modoViajeEnCurso: true,
+        ),
+        const SizedBox(height: 16),
+      ] else if (_mostrarTarjetaPagadaCliente(v, estadoBase, data)) ...<Widget>[
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF10231A),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.greenAccent.withValues(alpha: 0.45),
+            ),
+          ),
+          child: const Row(
+            children: <Widget>[
+              Icon(Icons.check_circle_outline, color: Colors.greenAccent),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Pago con tarjeta confirmado. '
+                  'Al finalizar el viaje verás tu recibo.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+      ] else if (_mostrarPagoEfectivoCliente(
+        v,
+        estadoBase,
+        data,
+        codigoVerificado: codigoVerificado,
+      )) ...<Widget>[
+        const SizedBox(height: 12),
+        EfectivoPagoClienteBanner(
+          montoRd: v.precio,
+          desdeTarjeta: true,
+        ),
+        const SizedBox(height: 16),
+      ],
+    ];
+
+    return <Widget>[
+      if (panelConductorAsignado && pinEnZonaFija) ...<Widget>[
+        _buildDriverCard(v, soloDatosConductor: true),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _llamarConductorCliente(v),
+                icon: const Icon(Icons.phone, size: 18),
+                label: const Text('Llamar'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _whatsAppConductorCliente(v),
+                icon: const Icon(Icons.chat, size: 18),
+                label: const Text('Chat'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+      ] else if (panelConductorAsignado) ...<Widget>[
+        ClienteViajeConductorAsignadoPanel(
+          viaje: v,
+          estadoBase: estadoEfectivo,
+          etaLinea: _lineaEtaPickupCliente(v, estadoEfectivo),
+          etaTituloHttp: _pickupEtaTitulo,
+          conductorCard: _buildDriverCard(v, soloDatosConductor: true),
+          pinAbordo: null,
+          onLlamar: () => _llamarConductorCliente(v),
+          onWhatsApp: () => _whatsAppConductorCliente(v),
+          onChat: () => _abrirChatConductorCliente(v),
+          onVerEnMapa: () => _centrarEnTaxista(v),
+          onCentrarMapa: _isValidCoord(v.latTaxista, v.lonTaxista)
+              ? () => _centrarClienteYTaxista(v)
+              : null,
+        ),
+      ],
+      if (mostrarBotonTocaPinGrande && !mostrarCodigoCliente) ...<Widget>[
+        const SizedBox(height: 10),
+        _buildBotonTocaActualizarViaje(
+          viajeId: v.id,
+          enEsperaAbordo: false,
+        ),
+      ],
+      if (pinEnZonaFija && pagoYDetalles.isNotEmpty)
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.white12),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            collapsedIconColor: Colors.white54,
+            iconColor: Colors.white70,
+            title: const Text(
+              'Pago y detalles del viaje',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+              ),
+            ),
+            subtitle: Text(
+              'Toca para ver método de pago y cuenta',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 12,
+              ),
+            ),
+            children: pagoYDetalles,
+          ),
+        )
+      else ...pagoYDetalles,
+    ];
+  }
+
+  Widget _viajeSheetHandleCliente({
+    bool mostrarHintDeslizar = false,
+    bool arrastreManualHabilitado = true,
+    required double minSize,
+    DraggableScrollableController? sheetController,
+    double maxSize = 0.94,
+  }) {
+    Widget handle = Semantics(
+      label: 'Deslizar tarjeta del viaje',
+      child: SizedBox(
+        width: double.infinity,
+        height: mostrarHintDeslizar ? 56 : 48,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 5,
+              decoration: BoxDecoration(
+                color: Colors.white38,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            if (mostrarHintDeslizar) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Desliza hacia arriba o abajo',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.42),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    if (!arrastreManualHabilitado) return handle;
+
+    return _wrapArrastreManualSheet(
+      habilitado: true,
+      minSize: minSize,
+      maxSize: maxSize,
+      sheetController: sheetController,
+      child: handle,
+    );
+  }
+
+  Widget _wrapArrastreManualSheet({
+    required Widget child,
+    required bool habilitado,
+    required double minSize,
+    DraggableScrollableController? sheetController,
+    double maxSize = 0.94,
+  }) {
+    if (!habilitado) return child;
+
+    final DraggableScrollableController ctrl =
+        sheetController ?? _viajeSheetCtrl;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragStart: (_) {
+        _sheetPointerActivo = true;
+        _sheetUltimoGestUsuario = DateTime.now();
+      },
+      onVerticalDragUpdate: (DragUpdateDetails details) {
+        if (!ctrl.isAttached) return;
+        final double h = MediaQuery.sizeOf(context).height;
+        if (h <= 0) return;
+        final double next =
+            (ctrl.size - details.delta.dy / h).clamp(minSize, maxSize);
+        if (_sheetFaseUiEsAbordo && next < _kViajeSheetAbordoPin - 0.06) {
+          _sheetAbordoColapsoUsuario = true;
+          _sheetExpandPendienteTarget = null;
+        }
+        ctrl.jumpTo(next);
+      },
+      onVerticalDragEnd: (_) => _finalizarInteraccionSheetUsuario(),
+      onVerticalDragCancel: () => _finalizarInteraccionSheetUsuario(),
+      child: child,
+    );
+  }
+
+  bool _sheetAutoExpandPorMapaPermitido({
+    required bool esMotor,
+    required bool faseAbordoPin,
+    required bool fasePickupConductor,
+  }) {
+    return !esMotor && !faseAbordoPin && !fasePickupConductor;
+  }
+
+  void _colapsarSheetPorMapaEnFase({
+    required bool fasePickupConductor,
+    required bool faseAbordoPin,
+    required bool faseEnRuta,
+  }) {
+    // En abordo+PIN el cliente debe ver el código: no colapsar por cámara/mapa.
+    if (faseAbordoPin) return;
+    final double? target = fasePickupConductor
+        ? _kViajeSheetPickupCompact
+        : (faseEnRuta ? _kViajeSheetInitial : null);
+    _colapsarSheetPorTapMapa(target: target);
   }
 
   Widget _viajeSheetDivider([String label = 'Detalles del viaje']) {
@@ -813,9 +1671,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     String estadoBase,
     bool cancelarHabilitado, {
     bool compacto = false,
+    bool reforzarComunicacionEnSticky = false,
   }) {
-    final bool multiparada =
-        _clienteNavegacionMultiparadaActiva(v, estadoBase);
+    final bool multiparada = _clienteNavegacionMultiparadaActiva(v, estadoBase);
     final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
         !multiparada &&
         (_isValidCoord(v.latDestino, v.lonDestino) || _simCasa);
@@ -823,9 +1681,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final String miUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     final String nombreCond =
         v.nombreTaxista.isNotEmpty ? v.nombreTaxista : 'Conductor';
-    final String telCond = v.telefonoTaxista.isNotEmpty
-        ? v.telefonoTaxista
-        : v.telefono.trim();
+    final String telCond =
+        v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono.trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -876,7 +1733,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
               ),
             ),
           ),
-        if (tieneTaxista && !compacto) ...[
+        if (tieneTaxista && (!compacto || reforzarComunicacionEnSticky)) ...[
           if (mostrarNavDestino) const SizedBox(height: 10),
           Row(
             children: [
@@ -936,8 +1793,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         telefonoUriWhatsAppApp(tc, waMsg))) {
                       return;
                     }
-                    await telefonoLaunchUri(
-                        telefonoUriWhatsAppWeb(tc, waMsg));
+                    await telefonoLaunchUri(telefonoUriWhatsAppWeb(tc, waMsg));
                   },
                 ),
               ),
@@ -948,16 +1804,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   icon: Icons.chat,
                   label: 'Chat',
                   onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          otroUid: v.uidTaxista,
-                          otroNombre: nombreCond,
-                          viajeId: v.id,
-                        ),
-                      ),
-                    );
+                    final String uidTx = _uidTaxistaDelViaje(v);
+                    final String miUid =
+                        FirebaseAuth.instance.currentUser?.uid ?? '';
+                    unawaited(ChatViajeNav.abrir(
+                      context: context,
+                      miUid: miUid,
+                      otroUid: uidTx,
+                      otroNombre: nombreCond,
+                      viajeId: v.id,
+                    ));
                   },
                 ),
               ),
@@ -1039,9 +1895,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> _llamarConductorCliente(Viaje v) async {
-    final String telCond = v.telefonoTaxista.isNotEmpty
-        ? v.telefonoTaxista
-        : v.telefono.trim();
+    final String telCond =
+        v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono.trim();
     final String tc = telefonoNormalizarDigitos(telCond);
     if (tc.isEmpty) {
       if (!context.mounted) return;
@@ -1062,9 +1917,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> _whatsAppConductorCliente(Viaje v) async {
-    final String telCond = v.telefonoTaxista.isNotEmpty
-        ? v.telefonoTaxista
-        : v.telefono.trim();
+    final String telCond =
+        v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono.trim();
     final String tc = telefonoNormalizarDigitos(telCond);
     if (tc.isEmpty) {
       if (!context.mounted) return;
@@ -1091,38 +1945,37 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   void _abrirChatConductorCliente(Viaje v) {
     final String nombreCond =
         v.nombreTaxista.isNotEmpty ? v.nombreTaxista : 'Conductor';
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          otroUid: v.uidTaxista,
-          otroNombre: nombreCond,
-          viajeId: v.id,
-        ),
-      ),
-    );
+    final String uidTx = _uidTaxistaDelViaje(v);
+    final String miUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    unawaited(ChatViajeNav.abrir(
+      context: context,
+      miUid: miUid,
+      otroUid: uidTx,
+      otroNombre: nombreCond,
+      viajeId: v.id,
+    ));
   }
 
   void _maybeColapsarSheetPickupNav(Viaje v, String estadoBase) {
-    if (_sheetCollapsedPickupForViajeId == v.id) return;
-    final bool esperandoPool = !v.esTurismo &&
-        v.uidTaxista.isEmpty &&
-        (estadoBase == EstadosViaje.pendiente ||
-            estadoBase == EstadosViaje.pendientePago);
-    final bool turismoSinConductor = v.esTurismo && v.uidTaxista.isEmpty;
-    final bool fasePickup = v.uidTaxista.isNotEmpty &&
-        (estadoBase == EstadosViaje.aceptado ||
-            estadoBase == EstadosViaje.enCaminoPickup) &&
-        _isValidCoord(v.latTaxista, v.lonTaxista);
-    if (!esperandoPool && !turismoSinConductor && !fasePickup) return;
-    _sheetExpandedTarget = (esperandoPool || turismoSinConductor)
-        ? _kViajeSheetEsperaConductor
-        : _kViajeSheetPickupCompact;
-    _sheetCollapsedPickupForViajeId = v.id;
-    _expandirSheetTrasMapaInteract();
-    if (fasePickup && !_seguirTaxistaCamara) {
-      setState(() => _seguirTaxistaCamara = true);
-    }
+    _maybeAutoExpandirSheetPorFaseCliente(
+      v: v,
+      estadoBase: estadoBase,
+      faseAbordoPin: EstadosViaje.esAbordo(estadoBase) ||
+          _clienteAbordoEnViajeDoc(
+            <String, dynamic>{'estado': estadoBase},
+            v,
+          ),
+      codigoVerificado: v.codigoVerificado,
+      faseEnRuta: v.codigoVerificado &&
+          EstadosViaje.esEnCurso(estadoBase),
+      fasePickupConductor: v.uidTaxista.isNotEmpty &&
+          !v.codigoVerificado &&
+          (estadoBase == EstadosViaje.aceptado ||
+              estadoBase == EstadosViaje.enCaminoPickup),
+      esperandoConductor: v.uidTaxista.isEmpty &&
+          (estadoBase == EstadosViaje.pendiente ||
+              estadoBase == EstadosViaje.pendientePago),
+    );
   }
 
   void _schedulePickupEtaRefresh(Viaje v, String estadoBase) {
@@ -1185,6 +2038,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           _pickupEtaDetalle =
               dir.durationText != null ? '${dir.durationText} · $kmTxt' : kmTxt;
         });
+        _intentarRecuperarSheetTrasEvento();
         return;
       }
     } catch (_) {}
@@ -1201,6 +2055,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       _pickupEtaDetalle =
           '${km.toStringAsFixed(1)} km aprox. (sin tráfico en vivo)';
     });
+    _intentarRecuperarSheetTrasEvento();
   }
 
   // 🚀 NUEVO: Iniciar escucha de conductores disponibles
@@ -1449,8 +2304,25 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     return false;
   }
 
+  void _avisarDestinoSinCoordenadas() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'El destino no tiene coordenadas válidas. '
+          'Selecciona un destino en el mapa antes de navegar.',
+        ),
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
   Future<void> _openGoogleMapsTo(double lat, double lon,
       {String? label}) async {
+    if (!_isValidCoord(lat, lon)) {
+      _avisarDestinoSinCoordenadas();
+      return;
+    }
     final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
     final String qLabel = (label == null || label.trim().isEmpty)
         ? '$la,$lo'
@@ -1475,17 +2347,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> _openWazeTo(double lat, double lon) async {
-    final String la = _fmtCoord(lat), lo = _fmtCoord(lon);
-    final Uri web = Uri.parse('https://waze.com/ul?ll=$la,$lo&navigate=yes');
-    if (kIsWeb) {
-      if (await _tryLaunch(web)) return;
-      await _openGoogleMapsTo(lat, lon);
+    if (!NavegacionExternaLauncher.coordsValidas(lat, lon)) {
+      _avisarDestinoSinCoordenadas();
       return;
     }
-    final Uri deep = Uri.parse('waze://?ll=$la,$lo&navigate=yes');
-    if (await _tryLaunch(deep)) return;
-    if (await _tryLaunch(web, preferExternalApp: false)) return;
-    await _openGoogleMapsTo(lat, lon);
+    await NavegacionExternaLauncher.abrirWazeDestino(lat, lon);
   }
 
   /// Abre Google Maps en el punto del conductor (vista / marcador), sin forzar ruta en la app RAI.
@@ -1505,14 +2371,24 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
   }
 
   Future<void> abrirNavegacionAlDestino(Viaje v) async {
-    if (!_isValidCoord(v.latDestino, v.lonDestino)) return;
+    final destRes = ViajeNavegacionResolver.destino(v);
+    if (destRes == null) {
+      _avisarDestinoSinCoordenadas();
+      return;
+    }
+    final double destLat = destRes.lat;
+    final double destLon = destRes.lon;
     if (!mounted) return;
     _marcarClienteNavOrientacionOk();
 
+    final origenRes = ViajeNavegacionResolver.origen(v);
+    final double origenLat = origenRes?.lat ?? v.latCliente;
+    final double origenLon = origenRes?.lon ?? v.lonCliente;
+
     final List<({double lat, double lon, String label})> paradas =
         _paradasIntermediasResueltas(v);
-    final bool multi = paradas.isNotEmpty &&
-        _isValidCoord(v.latCliente, v.lonCliente);
+    final bool multi =
+        paradas.isNotEmpty && _isValidCoord(origenLat, origenLon);
 
     if (multi) {
       await showNavegacionWazeMapsSheet(
@@ -1522,13 +2398,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         tieneCoords: true,
         footerHint:
             'Google Maps abre la ruta completa. Waze navega al destino final.',
-        onWaze: () => unawaited(_openWazeTo(v.latDestino, v.lonDestino)),
+        onWaze: () => unawaited(_openWazeTo(destLat, destLon)),
         onMaps: () => unawaited(
           NavegacionExternaLauncher.abrirGoogleMapsRutaConParadas(
-            origenLat: v.latCliente,
-            origenLon: v.lonCliente,
-            destinoLat: v.latDestino,
-            destinoLon: v.lonDestino,
+            origenLat: origenLat,
+            origenLon: origenLon,
+            destinoLat: destLat,
+            destinoLon: destLon,
             paradas: paradas
                 .map((p) => (lat: p.lat, lon: p.lon))
                 .toList(growable: false),
@@ -1543,12 +2419,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       title: 'Navegar al destino',
       addressLine: v.destino.trim().isNotEmpty ? 'Destino: ${v.destino}' : null,
       tieneCoords: true,
-      gpsCoordinatesLine:
-          'GPS: ${_fmtCoord(v.latDestino)}, ${_fmtCoord(v.lonDestino)}',
+      gpsCoordinatesLine: 'GPS: ${_fmtCoord(destLat)}, ${_fmtCoord(destLon)}',
       footerHint: 'Elige Waze o Google Maps.',
-      onWaze: () => unawaited(_openWazeTo(v.latDestino, v.lonDestino)),
+      onWaze: () => unawaited(_openWazeTo(destLat, destLon)),
       onMaps: () => unawaited(
-        _openGoogleMapsTo(v.latDestino, v.lonDestino, label: v.destino),
+        _openGoogleMapsTo(destLat, destLon, label: v.destino),
       ),
     );
   }
@@ -1567,7 +2442,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (!_isValidCoord(v.latTaxista, v.lonTaxista)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Esperando ubicación GPS del conductor en tiempo real.'),
+          content:
+              Text('Esperando ubicación GPS del conductor en tiempo real.'),
         ),
       );
       return;
@@ -1640,179 +2516,25 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     return (v.waypoints?.isNotEmpty ?? false);
   }
 
-  String _codigoVerificacionDesdeDoc(Viaje v, Map<String, dynamic> data) {
-    final String desdeViaje = (v.codigoVerificacion ?? '').trim();
-    if (desdeViaje.isNotEmpty) return desdeViaje;
-    for (final String k in <String>[
-      'codigoVerificacion',
-      'codigo_verificacion',
-      'codigoVerificacionBola',
-      'boardingPin',
-    ]) {
-      final String s = (data[k] ?? '').toString().trim();
-      if (s.isNotEmpty) return s;
-    }
-    final Map<String, dynamic>? bola = _bolaPickupDocData;
-    if (bola != null) {
-      final String desdeBola =
-          (bola['codigoVerificacionBola'] ?? '').toString().trim();
-      if (desdeBola.isNotEmpty) return desdeBola;
-    }
-    return '';
-  }
 
-  /// Mismo criterio que viaje estándar, ampliado: el PIN se ve al llegar el conductor, no solo en el frame `a_bordo`.
-  bool _clienteDebeMostrarCodigoVerificacion(
-    Viaje v,
-    String estadoBase,
-    String codigo,
-    Map<String, dynamic> viajeData,
-  ) {
-    if (v.uidTaxista.isEmpty || v.codigoVerificado || codigo.isEmpty) {
-      return false;
-    }
-    if (!ViajePoolTaxistaGate.clientePinBolaPermitidoEnViajeEnCurso(
-      viajeData: viajeData,
-      bolaData: _bolaPickupDocData,
-    )) {
-      return false;
-    }
-    return estadoBase == EstadosViaje.aBordo ||
-        estadoBase == EstadosViaje.enCaminoPickup ||
-        estadoBase == EstadosViaje.aceptado ||
-        (estadoBase == EstadosViaje.enCurso && !v.codigoVerificado);
-  }
 
-  void _disposeBolaPickupWatch() {
-    _bolaPickupSub?.cancel();
-    _bolaPickupSub = null;
-    _bolaPickupWatchId = null;
-    _bolaPickupDocData = null;
-  }
+  Map<String, dynamic> _viajeDocMultiparada(Viaje v) =>
+      ViajeNavegacionResolver.documento(v);
 
-  void _watchBolaPickupDoc(Map<String, dynamic> viajeData) {
-    if (!ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(viajeData)) {
-      if (_bolaPickupWatchId != null) {
-        _disposeBolaPickupWatch();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      }
-      return;
-    }
-    final String bolaId =
-        ViajePoolTaxistaGate.bolaPuebloIdDesdeViajeDoc(viajeData);
-    if (bolaId.isEmpty) {
-      if (_bolaPickupWatchId != null) {
-        _disposeBolaPickupWatch();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      }
-      return;
-    }
-    if (_bolaPickupWatchId == bolaId) return;
-    _disposeBolaPickupWatch();
-    _bolaPickupWatchId = bolaId;
-    unawaited(() async {
-      try {
-        final DocumentSnapshot<Map<String, dynamic>> snap =
-            await FirebaseFirestore.instance
-                .collection('bolas_pueblo')
-                .doc(bolaId)
-                .get();
-        if (!mounted || _bolaPickupWatchId != bolaId) return;
-        if (snap.exists) {
-          setState(() => _bolaPickupDocData = snap.data());
-        }
-      } catch (_) {}
-    }());
-    _bolaPickupSub = FirebaseFirestore.instance
-        .collection('bolas_pueblo')
-        .doc(bolaId)
-        .snapshots()
-        .listen((DocumentSnapshot<Map<String, dynamic>> snap) {
-      if (!mounted) return;
-      final Map<String, dynamic>? bolaData = snap.data();
-      final String estadoBola =
-          (bolaData?['estado'] ?? '').toString().trim().toLowerCase();
-      if (estadoBola == 'cancelada') {
-        final String uid =
-            (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-        final String canceladaPor =
-            (bolaData?['canceladaPor'] ?? '').toString().trim();
-        if (canceladaPor.isNotEmpty && canceladaPor == uid) {
-          setState(() => _bolaPickupDocData = bolaData);
-          return;
-        }
-        final String msg = bolaData != null
-            ? BolaPuebloRepo.mensajeCancelacionParaParticipante(bolaData, uid)
-            : 'El acuerdo Bola Ahorro fue cancelado.';
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(msg), duration: const Duration(seconds: 4)),
-          );
-          unawaited(_irAlInicioSeguro());
-        });
-        return;
-      }
-      setState(() => _bolaPickupDocData = bolaData);
-    }, onError: (Object _) {});
-  }
+  Map<String, dynamic> _viajeDocNavegacion(Viaje v) => _viajeDocMultiparada(v);
 
   List<({double lat, double lon, String label})> _paradasIntermediasResueltas(
     Viaje v,
   ) {
-    final List<({double lat, double lon, String label})> out =
-        <({double lat, double lon, String label})>[];
-    final List<Map<String, dynamic>>? raw = v.waypoints;
-    if (raw != null) {
-      for (final Map<String, dynamic> m in raw) {
-        final double? la = _coordDoubleMap(m['lat']);
-        final double? lo = _coordDoubleMap(m['lon'] ?? m['lng']);
-        if (la == null || lo == null || !_isValidCoord(la, lo)) continue;
-        final String label = (m['label'] ?? 'Parada').toString().trim();
-        out.add((lat: la, lon: lo, label: label.isEmpty ? 'Parada' : label));
-      }
-    }
-    if (out.isNotEmpty) return out;
-
-    final dynamic rp = v.extras?['rutaPuntos'];
-    if (rp is List) {
-      for (final dynamic item in rp) {
-        if (item is! Map) continue;
-        final String rol = (item['rol'] ?? '').toString().toLowerCase();
-        if (rol == 'origen' || rol == 'destino') continue;
-        final double? la = _coordDoubleMap(item['lat']);
-        final double? lo = _coordDoubleMap(item['lon'] ?? item['lng']);
-        if (la == null || lo == null || !_isValidCoord(la, lo)) continue;
-        final String label = (item['label'] ?? 'Parada').toString().trim();
-        out.add((lat: la, lon: lo, label: label.isEmpty ? 'Parada' : label));
-      }
-    }
-    return out;
+    return MultiparadaRutaHelper.paradasIntermediasParaNavegacion(
+      viajeData: _viajeDocMultiparada(v),
+      waypointsModel: v.waypoints,
+    );
   }
 
   List<({double lat, double lon, String label, bool esFinal})>
-      _destinosOrdenadosMultiparadaCliente(Viaje v) {
-    final List<({double lat, double lon, String label, bool esFinal})> out =
-        <({double lat, double lon, String label, bool esFinal})>[];
-    for (final ({double lat, double lon, String label}) p
-        in _paradasIntermediasResueltas(v)) {
-      out.add((lat: p.lat, lon: p.lon, label: p.label, esFinal: false));
-    }
-    if (_isValidCoord(v.latDestino, v.lonDestino)) {
-      final String dest = v.destino.trim();
-      out.add((
-        lat: v.latDestino,
-        lon: v.lonDestino,
-        label: dest.isNotEmpty ? dest : 'Destino final',
-        esFinal: true,
-      ));
-    }
-    return out;
-  }
+      _destinosOrdenadosMultiparadaCliente(Viaje v) =>
+          ViajeNavegacionResolver.legs(v);
 
   ({double lat, double lon, String label, bool esFinal})?
       _destinoMultiActualCliente(Viaje v) {
@@ -1834,17 +2556,30 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (v.multiparadaCompleta) return true;
     final int total = _destinosOrdenadosMultiparadaCliente(v).length;
     if (total <= 0) return true;
-    return v.multiparadaLegCompletadas >= total ||
-        _multiLegCompletadas >= total;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    return visitados.length >= total;
   }
 
   void _syncMultiLegClienteDesdeViaje(Viaje v) {
     if (!_esViajeMultiparada(v)) {
       if (_multiLegCompletadas != 0) _multiLegCompletadas = 0;
+      _clienteMultiNavLegIndices.clear();
+      _clienteOrigenMultiNavAbierto = false;
+      _clienteMultiNavViajeId = null;
       return;
     }
+    if (_clienteMultiNavViajeId != v.id) {
+      _clienteMultiNavLegIndices.clear();
+      _clienteOrigenMultiNavAbierto = false;
+      _clienteMultiNavViajeId = v.id;
+    }
     final int total = _destinosOrdenadosMultiparadaCliente(v).length;
-    final int fromServer = v.multiparadaLegCompletadas.clamp(0, total);
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    final int fromServer = visitados.isNotEmpty
+        ? visitados.length
+        : v.multiparadaLegCompletadas.clamp(0, total);
     if (_multiLegCompletadas != fromServer) {
       _multiLegCompletadas = fromServer;
     }
@@ -1865,8 +2600,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     String estadoBase, {
     required bool mostrarCodigoCliente,
   }) {
-    final bool multiparada =
-        _clienteNavegacionMultiparadaActiva(v, estadoBase);
+    final bool multiparada = _clienteNavegacionMultiparadaActiva(v, estadoBase);
     final bool mostrarNavDestino = estadoBase == EstadosViaje.enCurso &&
         !multiparada &&
         (_isValidCoord(v.latDestino, v.lonDestino) || _simCasa);
@@ -1884,46 +2618,161 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
-  Future<void> _navegarDestinoMultiparadaCliente(Viaje v) async {
-    final leg = _destinoMultiActualCliente(v);
-    if (leg == null || !mounted) return;
-    _marcarClienteNavOrientacionOk(multiparada: true);
-    final int total = _destinosOrdenadosMultiparadaCliente(v).length;
-    final int paso = _multiLegCompletadas + 1;
+  Future<void> _navegarPuntoMultiparadaCliente(
+    Viaje v, {
+    required int? legIndex,
+    required double lat,
+    required double lon,
+    required String label,
+    required String tituloSheet,
+    required int pasoEnTotal,
+    required String tipoLeg,
+  }) async {
+    if (!mounted) return;
+    if (!NavegacionExternaLauncher.coordsValidas(lat, lon)) {
+      _avisarDestinoSinCoordenadas();
+      return;
+    }
+    if (legIndex != null) {
+      _marcarClienteNavOrientacionOk(multiparada: true);
+    }
     await showNavegacionWazeMapsSheet(
       context,
-      title: leg.esFinal ? 'Navegar al destino final' : 'Navegar a la parada',
-      addressLine:
-          '${leg.label}\n($paso de $total · ${leg.esFinal ? 'destino final' : 'parada'})',
+      title: tituloSheet,
+      addressLine: pasoEnTotal > 0
+          ? '$label\n($pasoEnTotal · $tipoLeg)'
+          : label,
       tieneCoords: true,
-      gpsCoordinatesLine:
-          'GPS: ${_fmtCoord(leg.lat)}, ${_fmtCoord(leg.lon)}',
+      gpsCoordinatesLine: 'GPS: ${_fmtCoord(lat)}, ${_fmtCoord(lon)}',
       footerHint:
-          'Waze o Maps abren este punto exacto. El conductor confirma cada parada en su app.',
-      onWaze: () => unawaited(_openWazeTo(leg.lat, leg.lon)),
-      onMaps: () => unawaited(_openGoogleMapsTo(leg.lat, leg.lon, label: leg.label)),
+          'Waze o Maps abren este punto. El conductor confirma cada parada en su app.',
+      onWaze: () => unawaited(_openWazeTo(lat, lon)),
+      onMaps: () => unawaited(_openGoogleMapsTo(lat, lon, label: label)),
     );
+    if (!mounted) return;
+    setState(() {
+      if (legIndex == null) {
+        _clienteOrigenMultiNavAbierto = true;
+      } else {
+        _clienteMultiNavLegIndices.add(legIndex);
+      }
+    });
+  }
+
+  List<MultiparadaNavegacionTarjetaModel> _tarjetasNavegacionMultiparadaCliente(
+    Viaje v,
+  ) {
+    final legs = _destinosOrdenadosMultiparadaCliente(v);
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: legs.length);
+    final tarjetas = <MultiparadaNavegacionTarjetaModel>[];
+
+    final origen = ViajeNavegacionResolver.origen(v);
+    if (origen != null &&
+        ViajeNavegacionResolver.coordsValidas(origen.lat, origen.lon)) {
+      tarjetas.add(
+        MultiparadaNavegacionTarjetaModel(
+          titulo: 'Recogida',
+          subtitulo: origen.label,
+          accion: _clienteOrigenMultiNavAbierto
+              ? 'Abierto en Waze/Maps'
+              : 'Waze o Maps · Recogida',
+          acento: const Color(0xFF0F766E),
+          icono: Icons.flag_circle_rounded,
+          navegadoEnSesion: _clienteOrigenMultiNavAbierto,
+          onTap: () => unawaited(
+            _navegarPuntoMultiparadaCliente(
+              v,
+              legIndex: null,
+              lat: origen.lat,
+              lon: origen.lon,
+              label: origen.label,
+              tituloSheet: 'Navegar a la recogida',
+              pasoEnTotal: 0,
+              tipoLeg: 'origen',
+            ),
+          ),
+        ),
+      );
+    }
+
+    for (var i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      if (!NavegacionExternaLauncher.coordsValidas(leg.lat, leg.lon)) continue;
+      final bool visitado = visitados.contains(i);
+      final bool navegado = _clienteMultiNavLegIndices.contains(i);
+      tarjetas.add(
+        MultiparadaNavegacionTarjetaModel(
+          titulo: leg.esFinal ? 'Destino final' : 'Parada ${i + 1}',
+          subtitulo: leg.label,
+          accion: visitado
+              ? 'Visitada (conductor confirmó)'
+              : navegado
+                  ? 'Abierto en Waze/Maps'
+                  : 'Tocá para Waze o Maps',
+          acento: kMultiparadaNavegacionAcentos[
+              i % kMultiparadaNavegacionAcentos.length],
+          icono:
+              leg.esFinal ? Icons.flag_rounded : Icons.location_on_rounded,
+          legIndex: i,
+          visitado: visitado,
+          navegadoEnSesion: navegado,
+          onTap: visitado
+              ? null
+              : () => unawaited(
+                    _navegarPuntoMultiparadaCliente(
+                      v,
+                      legIndex: i,
+                      lat: leg.lat,
+                      lon: leg.lon,
+                      label: leg.label,
+                      tituloSheet: leg.esFinal
+                          ? 'Navegar al destino final'
+                          : 'Navegar a la parada',
+                      pasoEnTotal: i + 1,
+                      tipoLeg:
+                          leg.esFinal ? 'destino final' : 'parada ${i + 1}',
+                    ),
+                  ),
+        ),
+      );
+    }
+    return tarjetas;
   }
 
   Future<void> _abrirGoogleMapsRutaMultiRestanteCliente(Viaje v) async {
     final List<({double lat, double lon, String label, bool esFinal})> legs =
         _destinosOrdenadosMultiparadaCliente(v);
     if (legs.isEmpty || !mounted) return;
-    final int from = _multiLegCompletadas.clamp(0, legs.length);
-    if (from >= legs.length) return;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: legs.length);
+    final List<({double lat, double lon, String label, bool esFinal})>
+        remaining = <({double lat, double lon, String label, bool esFinal})>[];
+    for (var i = 0; i < legs.length; i++) {
+      if (!visitados.contains(i)) remaining.add(legs[i]);
+    }
+    if (remaining.isEmpty) return;
 
-    if (!_isValidCoord(v.latCliente, v.lonCliente)) {
+    final origenRes = ViajeNavegacionResolver.origen(v);
+    if (!_isValidCoord(v.latCliente, v.lonCliente) && origenRes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sin coordenadas de origen para la ruta.')),
+        const SnackBar(
+            content: Text('Sin coordenadas de origen para la ruta.')),
       );
       return;
     }
 
-    final List<({double lat, double lon, String label, bool esFinal})> remaining =
-        legs.sublist(from);
+    final double origenLat = origenRes?.lat ?? v.latCliente;
+    final double origenLon = origenRes?.lon ?? v.lonCliente;
+
     final double dLat = remaining.last.lat;
     final double dLon = remaining.last.lon;
-    final List<({double lat, double lon})> paradas = <({double lat, double lon})>[];
+    if (!_isValidCoord(dLat, dLon)) {
+      _avisarDestinoSinCoordenadas();
+      return;
+    }
+    final List<({double lat, double lon})> paradas =
+        <({double lat, double lon})>[];
     if (remaining.length > 1) {
       for (var i = 0; i < remaining.length - 1; i++) {
         paradas.add((lat: remaining[i].lat, lon: remaining[i].lon));
@@ -1933,16 +2782,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     await showNavegacionWazeMapsSheet(
       context,
       title: 'Ruta con paradas restantes',
-      addressLine:
-          '${v.origen} → ${paradas.length} parada(s) → ${v.destino}',
+      addressLine: '${v.origen} → ${paradas.length} parada(s) → ${v.destino}',
       tieneCoords: true,
       footerHint:
-          'Google Maps: ruta completa. Waze: solo el último pin (usa «Navegar» parada a parada).',
+          'Google Maps: ruta completa. Waze: solo el último pin (usa las tarjetas parada a parada).',
       onWaze: () => unawaited(_openWazeTo(dLat, dLon)),
       onMaps: () => unawaited(
         NavegacionExternaLauncher.abrirGoogleMapsRutaConParadas(
-          origenLat: v.latCliente,
-          origenLon: v.lonCliente,
+          origenLat: origenLat,
+          origenLon: origenLon,
           destinoLat: dLat,
           destinoLon: dLon,
           paradas: paradas,
@@ -1957,151 +2805,36 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (legs.isEmpty) return const SizedBox.shrink();
 
     final int total = legs.length;
-    final int hechos = _multiLegCompletadas.clamp(0, total);
-    final bool completa = hechos >= total;
-    final leg = _destinoMultiActualCliente(v);
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    final int hechos = visitados.length.clamp(0, total);
+    final bool completa = hechos >= total || v.multiparadaCompleta;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.orange.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
-            border:
-                Border.all(color: Colors.orangeAccent.withValues(alpha: 0.45)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                completa
-                    ? 'Tu ruta: todos los destinos ($total/$total)'
-                    : 'Tu ruta: destino ${hechos + 1} de $total',
-                style: const TextStyle(
-                  color: Colors.orangeAccent,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Padding(
-                padding: const EdgeInsets.only(left: 8, bottom: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    const Icon(Icons.flag_circle,
-                        size: 14, color: Colors.green),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Recogida: ${v.origen}',
-                        style: TextStyle(
-                          color: hechos == 0 && !completa
-                              ? Colors.white
-                              : Colors.white70,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              for (var i = 0; i < legs.length; i++)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8, bottom: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Icon(
-                        i < hechos
-                            ? Icons.check_circle
-                            : (i == hechos && !completa
-                                ? Icons.radio_button_checked
-                                : Icons.circle_outlined),
-                        size: 18,
-                        color: i < hechos
-                            ? Colors.greenAccent
-                            : (i == hechos && !completa
-                                ? Colors.orangeAccent
-                                : Colors.white38),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '${i + 1}. ${legs[i].label}${legs[i].esFinal ? ' (final)' : ''}',
-                          style: TextStyle(
-                            color: i == hechos && !completa
-                                ? Colors.white
-                                : Colors.white70,
-                            fontSize: 13,
-                            fontWeight: i == hechos && !completa
-                                ? FontWeight.w600
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                    ],
+    return MultiparadaNavegacionTarjetasPanel(
+      tituloProgreso: completa
+          ? 'Tu ruta: todos los destinos ($hechos/$total)'
+          : 'Tu ruta: $hechos de $total visitados',
+      subtituloHint:
+          'Seguí la ruta en Waze o Maps. El conductor confirma cada parada con ✓ en su app.',
+      tarjetas: _tarjetasNavegacionMultiparadaCliente(v),
+      accionesInferiores: completa
+          ? const <Widget>[]
+          : <Widget>[
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    unawaited(_abrirGoogleMapsRutaMultiRestanteCliente(v)),
+                icon: const Icon(Icons.map, size: 20),
+                label: const Text('Ver ruta completa restante (Google Maps)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.lightBlueAccent,
+                  side: BorderSide(
+                    color: Colors.lightBlueAccent.withValues(alpha: 0.5),
                   ),
+                  minimumSize: const Size(double.infinity, 46),
                 ),
+              ),
             ],
-          ),
-        ),
-        if (!completa && leg != null) ...<Widget>[
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => unawaited(_navegarDestinoMultiparadaCliente(v)),
-              icon: const Icon(Icons.navigation, color: Colors.black, size: 24),
-              label: Text(
-                leg.esFinal
-                    ? 'NAVEGAR AL DESTINO FINAL'
-                    : 'NAVEGAR A PARADA ${hechos + 1}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.greenAccent,
-                foregroundColor: Colors.black,
-                minimumSize: const Size(double.infinity, 52),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'El conductor confirma cada parada en su app. '
-            'Tu progreso se actualiza en tiempo real.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.55),
-              fontSize: 12.5,
-              height: 1.35,
-            ),
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: () =>
-                unawaited(_abrirGoogleMapsRutaMultiRestanteCliente(v)),
-            icon: const Icon(Icons.map, size: 20),
-            label: const Text('Ver ruta completa restante (Google Maps)'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.lightBlueAccent,
-              side: BorderSide(
-                  color: Colors.lightBlueAccent.withValues(alpha: 0.5)),
-              minimumSize: const Size(double.infinity, 46),
-            ),
-          ),
-        ],
-      ],
     );
   }
 
@@ -2173,7 +2906,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           );
         }
       } else if (_isValidCoord(v.latCliente, v.lonCliente)) {
-        final List<({double lat, double lon})>? vias = _coordsWaypointsValidos(v);
+        final List<({double lat, double lon})>? vias =
+            _coordsWaypointsValidos(v);
         await _drawRoute(
           _latLng(v.latCliente, v.lonCliente),
           _latLng(v.latDestino, v.lonDestino),
@@ -2314,9 +3048,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     final List<({double lat, double lon, String label})> paradas =
         _paradasIntermediasResueltas(v);
     if (paradas.isEmpty) return null;
-    return paradas
-        .map((p) => (lat: p.lat, lon: p.lon))
-        .toList(growable: false);
+    return paradas.map((p) => (lat: p.lat, lon: p.lon)).toList(growable: false);
   }
 
   Future<void> _drawRoute(
@@ -2335,10 +3067,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         originLon: a.longitude,
         destLat: b.latitude,
         destLon: b.longitude,
-        waypoints:
-            (viaIntermediate != null && viaIntermediate.isNotEmpty)
-                ? viaIntermediate
-                : null,
+        waypoints: (viaIntermediate != null && viaIntermediate.isNotEmpty)
+            ? viaIntermediate
+            : null,
         withTraffic: true,
         region: 'do',
       );
@@ -2482,43 +3213,173 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _lastNonEmptyViajeActivoId = '';
     _viajeCierreDocSnap = null;
     _viajeCierreFetchKey = null;
+    _lastViajeUiCache = null;
   }
 
-  Future<void> _irAlInicioSeguro() async {
+  /// Viaje borrado en consola / `viajeActivoId` huérfano: no quedarse en carga infinita.
+  Future<bool> _confirmarViajeAusenteEnServidor(String viajeId) async {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    return ActiveTripService.confirmarViajeAusenteEnFirestore(
+      viajeId,
+      uid: uid,
+    );
+  }
+
+  Future<void> _salirTrasViajeDesaparecido({
+    required String viajeId,
+    required String uid,
+    String origen = 'viajeEliminado',
+  }) async {
+    final String id = viajeId.trim();
+    if (id.isNotEmpty && _salidaCierreIniciadaParaViajeId == id) return;
+
+    if (id.isNotEmpty) {
+      final bool ausente = await _confirmarViajeAusenteEnServidor(id);
+      if (!ausente || !mounted) return;
+    }
+
+    if (id.isNotEmpty) _salidaCierreIniciadaParaViajeId = id;
+
+    print('[VIAJE_ACTIVO] cliente $origen: viaje ausente ($id) → inicio');
+    await ActiveTripService.liberarClienteTrasViajeEliminado(
+      id,
+      uid: uid.trim(),
+    );
+    _stopClienteUbicacionEnViaje();
+    _limpiarCacheCierreViaje();
+
+    if (!mounted) return;
+    try {
+      await _irAlInicioSeguro(
+        forzarLimpiarViajeActivo: true,
+        omitirSnackViajeEliminado: true,
+      );
+      if (mounted) {
+        NavigationService.snackViajeYaNoDisponible(context: context);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _cargarDocCierreViajePerdido({
+    required String uid,
+    required String viajeId,
+  }) async {
+    final String lost = viajeId.trim();
+    if (lost.isEmpty) return;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> d = await FirebaseFirestore
+          .instance
+          .collection('viajes')
+          .doc(lost)
+          .get()
+          .timeout(const Duration(seconds: 8));
+      if (!mounted) return;
+      setState(() => _viajeCierreDocSnap = d);
+      if (!d.exists) {
+        unawaited(_salirTrasViajeDesaparecido(
+          viajeId: lost,
+          uid: uid,
+          origen: 'cierreFetchInexistente',
+        ));
+      }
+    } catch (e) {
+      print('[VIAJE_ACTIVO] cliente cierre fetch error: $e');
+      if (!mounted) return;
+      setState(() => _viajeCierreFetchKey = null);
+      // Sin red: no echar al inicio; el stream o un reintento lo resolverá.
+    }
+  }
+
+  Future<void> _irAlInicioSeguro({
+    bool forzarLimpiarViajeActivo = false,
+    bool omitirSnackViajeEliminado = false,
+  }) async {
     if (_yendoAlInicio) return;
+    if (!mounted) return;
     setState(() => _yendoAlInicio = true);
     _disposeDocWatch();
     _stopClienteUbicacionEnViaje();
     ActiveTripService.cancelarMantenimientoOverlayViaje();
     try {
+      String viajeId = _lastNonEmptyViajeActivoId.trim();
+      if (viajeId.isEmpty) {
+        viajeId = ActiveTripService.viajeOperativoClienteConocido;
+      }
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+
+      if (!forzarLimpiarViajeActivo &&
+          uid != null &&
+          uid.trim().isNotEmpty &&
+          viajeId.isNotEmpty) {
+        final bool operativo =
+            await ActiveTripService.viajeDocSigueOperativoParaCliente(
+          viajeId,
+          uid.trim(),
+        );
+        if (operativo) {
+          forzarLimpiarViajeActivo = false;
+        }
+      }
+
+      if (!forzarLimpiarViajeActivo && uid != null && uid.trim().isNotEmpty) {
+        if (ActiveTripService.debeForzarInicioClienteShell) {
+          await NavigationService.irAlInicioCliente(
+            context: context,
+            viajeId: viajeId.isNotEmpty ? viajeId : null,
+            forzarLimpiarViajeActivo: false,
+          ).timeout(const Duration(seconds: 12));
+          _lastNonEmptyViajeActivoId = '';
+          return;
+        }
+
+        final String? reparado =
+            await ActiveTripService.repararViajeActivoClienteSiHuerfano(
+          uid.trim(),
+          viajeIdHint: viajeId.isNotEmpty ? viajeId : null,
+        );
+        if (reparado != null && reparado.isNotEmpty) {
+          ActiveTripService.cancelarForzarInicioClienteShellForzado();
+          ActiveTripService.mantenerOverlayViajeEnShell(
+            NavigationService.kOverlayClienteViajeActivo,
+          );
+          ActiveTripService.notificarRebuildShell();
+          if (mounted) {
+            setState(() => _yendoAlInicio = false);
+          }
+          return;
+        }
+      }
+
       await NavigationService.irAlInicioCliente(
         context: context,
-        viajeId: _lastNonEmptyViajeActivoId.isNotEmpty
-            ? _lastNonEmptyViajeActivoId
-            : null,
-        forzarLimpiarViajeActivo: true,
+        viajeId: viajeId.isNotEmpty ? viajeId : null,
+        forzarLimpiarViajeActivo: forzarLimpiarViajeActivo,
+        omitirGuardOperativo: false,
       ).timeout(const Duration(seconds: 12));
-    } catch (_) {
-      if (mounted) setState(() => _yendoAlInicio = false);
+      _lastNonEmptyViajeActivoId = '';
+      if (forzarLimpiarViajeActivo && !omitirSnackViajeEliminado) {
+        NavigationService.snackViajeYaNoDisponible(context: context);
+      }
+    } catch (e) {
+      print('[VIAJE_ACTIVO] _irAlInicioSeguro error: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _yendoAlInicio = false);
+      }
     }
   }
 
-  Future<void> _pausarYVolverARai(String viajeId) async {
-    if (_yendoAlInicio) return;
-    final bool ok = await ClienteVolverRaiDialog.confirmar(context);
-    if (!ok || !mounted) return;
-    setState(() => _yendoAlInicio = true);
-    _disposeDocWatch();
-    _stopClienteUbicacionEnViaje();
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
-    try {
-      await NavigationService.pausarViajeClienteYVolverARai(
-        context: context,
-        viajeId: viajeId.trim().isNotEmpty ? viajeId : null,
-      ).timeout(const Duration(seconds: 12));
-    } catch (_) {
-      if (mounted) setState(() => _yendoAlInicio = false);
-    }
+  void _avisoViajeSigueActivo() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Tu viaje sigue activo. Si no ves el mapa, abre «Mis viajes → Viaje en curso».',
+        ),
+        duration: Duration(seconds: 4),
+        backgroundColor: Color(0xFF1B5E20),
+      ),
+    );
   }
 
   Widget _botonVolverARaiEnPanel(Viaje v) {
@@ -2528,9 +3389,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: _yendoAlInicio
-                ? null
-                : () => unawaited(_pausarYVolverARai(v.id)),
+            onPressed: _yendoAlInicio ? null : _avisoViajeSigueActivo,
             icon: const Icon(Icons.home_work_rounded, size: 20),
             label: Text(
               _yendoAlInicio ? 'Volviendo a RAI…' : 'Volver a RAI',
@@ -2552,7 +3411,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         Padding(
           padding: const EdgeInsets.only(top: 6, bottom: 4),
           child: Text(
-            'Tu viaje sigue activo. Retómalo desde el banner en Inicio.',
+            'Tu viaje sigue activo. Usa «Mis viajes → Viaje en curso» si necesitas volver al mapa.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.45),
@@ -2565,50 +3424,148 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
-  Widget _bodySinViajeActivo({required String mensaje}) {
+  void _programarSalidaAutomaticaSinViaje({bool forzarLimpiar = false}) {
+    if (_salidaAutoSinViajeDisparada || _yendoAlInicio) return;
+    if (ActiveTripService.debeForzarInicioClienteShell) {
+      return;
+    }
+    _salidaAutoSinViajeDisparada = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        _ejecutarSalidaAutomaticaSinViaje(forzarLimpiarInicial: forzarLimpiar),
+      );
+    });
+  }
+
+  /// Solo limpia `viajeActivoId` si el servidor confirma que no hay viaje operativo.
+  Future<void> _ejecutarSalidaAutomaticaSinViaje({
+    bool forzarLimpiarInicial = false,
+  }) async {
+    if (!mounted) return;
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    String hint = _lastNonEmptyViajeActivoId.trim();
+    if (hint.isEmpty) {
+      hint = ActiveTripService.viajeOperativoClienteConocido;
+    }
+    if (hint.isEmpty) {
+      hint = ActiveTripService.viajeIdPausaVoluntariaCliente;
+    }
+
+    bool forzarLimpiar = forzarLimpiarInicial;
+    final String u = uid?.trim() ?? '';
+
+    if (u.isNotEmpty) {
+      if (hint.isNotEmpty) {
+        final bool operativo =
+            await ActiveTripService.viajeDocSigueOperativoParaCliente(hint, u);
+        if (operativo) {
+          forzarLimpiar = false;
+        }
+      }
+      if (!forzarLimpiar) {
+        final String? reparado =
+            await ActiveTripService.repararViajeActivoClienteSiHuerfano(
+          u,
+          viajeIdHint: hint.isNotEmpty ? hint : null,
+        );
+        if (reparado != null && reparado.isNotEmpty) {
+          if (!mounted) return;
+          _salidaAutoSinViajeDisparada = false;
+          ActiveTripService.mantenerOverlayViajeEnShell(
+            NavigationService.kOverlayClienteViajeActivo,
+          );
+          ActiveTripService.notificarRebuildShell();
+          return;
+        }
+      }
+    }
+
+    if (!mounted) return;
+    try {
+      await _irAlInicioSeguro(forzarLimpiarViajeActivo: forzarLimpiar);
+    } finally {
+      if (mounted) {
+        _salidaAutoSinViajeDisparada = false;
+      }
+    }
+  }
+
+  Widget _cargaViajeConEscape({
+    required String mensaje,
+    required String viajeId,
+    VoidCallback? onReintentar,
+  }) {
+    return _ClienteCargaViajeGate(
+      mensaje: mensaje,
+      onVolverInicio: () {
+        if (!mounted) return;
+        NavigationService.retomarViajeActivoCliente();
+      },
+      onReintentar: onReintentar ??
+          () {
+            if (!mounted) return;
+            setState(() => _lastViajeUiCache = null);
+          },
+    );
+  }
+
+  Widget _bodyViajeSincronizacionLimitada({
+    required String viajeId,
+    String mensaje = 'Conectando con tu viaje…',
+  }) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Colors.greenAccent,
+              ),
+            ),
+            const SizedBox(height: 14),
             Text(
               mensaje,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 16),
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tu solicitud sigue activa. Si tarda mucho, reintenta o vuelve al inicio '
+              '(no cancela el viaje).',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 13,
+                height: 1.35,
+              ),
             ),
             const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  if (!mounted) return;
+                  setState(() => _lastViajeUiCache = null);
+                },
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Reintentar'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
                 onPressed: _yendoAlInicio
                     ? null
-                    : () => unawaited(_irAlInicioSeguro()),
-                icon: _yendoAlInicio
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.home_rounded, size: 20),
-                label: Text(
-                  _yendoAlInicio ? 'Volviendo…' : 'Volver al inicio',
-                ),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  textStyle: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 0,
-                ),
+                    : () => NavigationService.retomarViajeActivoCliente(),
+                icon: const Icon(Icons.home_rounded, size: 18),
+                label: const Text('Volver al inicio'),
               ),
             ),
           ],
@@ -2617,11 +3574,147 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
+  Widget _bodySinViajeActivo({required String mensaje}) {
+    final String hint = _lastNonEmptyViajeActivoId.trim().isNotEmpty
+        ? _lastNonEmptyViajeActivoId.trim()
+        : ActiveTripService.viajeOperativoClienteConocido;
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (ActiveTripService.debeForzarInicioClienteShell) {
+      // Pausa voluntaria: el shell ya muestra inicio + banner; no cancelar la pausa.
+      return const SizedBox.shrink();
+    }
+    return FutureBuilder<String?>(
+      future: uid == null || uid.isEmpty
+          ? Future<String?>.value(null)
+          : ActiveTripService.repararViajeActivoClienteSiHuerfano(
+              uid,
+              viajeIdHint: hint.isNotEmpty ? hint : null,
+            ),
+      builder: (BuildContext context, AsyncSnapshot<String?> snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return _cargaLinealOscura(mensaje: 'Sincronizando tu viaje…');
+        }
+
+        final String? viajeRecuperado = snap.data;
+        if (viajeRecuperado != null && viajeRecuperado.isNotEmpty) {
+          if (ActiveTripService.flujoPostViajeClienteActivo) {
+            return _bodySinViajeActivo(
+              mensaje: 'Preparando resumen del viaje…',
+            );
+          }
+          if (ActiveTripService.debeForzarInicioClienteShell) {
+            return const SizedBox.shrink();
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            ActiveTripService.cancelarForzarInicioClienteShellForzado();
+            ActiveTripService.mantenerOverlayViajeEnShell(
+              NavigationService.kOverlayClienteViajeActivo,
+            );
+            ActiveTripService.notificarRebuildShell();
+          });
+          return _cargaLinealOscura(mensaje: 'Retomando tu viaje…');
+        }
+
+        if (hint.isEmpty) {
+          _programarSalidaAutomaticaSinViaje();
+        } else {
+          return _cargaViajeConEscape(
+            mensaje: 'Conectando con tu viaje…',
+            viajeId: hint,
+          );
+        }
+
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  mensaje,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 16),
+                ),
+                if (hint.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Si tu conductor sigue esperando, retoma el viaje. '
+                    'No se cancela solo por volver al inicio.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                if (hint.isNotEmpty)
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _yendoAlInicio
+                          ? null
+                          : NavigationService.retomarViajeActivoCliente,
+                      icon: const Icon(Icons.local_taxi_rounded, size: 20),
+                      label: const Text('Retomar viaje'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (hint.isNotEmpty) const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _yendoAlInicio ? null : _avisoViajeSigueActivo,
+                    icon: _yendoAlInicio
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white70,
+                            ),
+                          )
+                        : const Icon(Icons.home_work_rounded, size: 20),
+                    label: Text(
+                      _yendoAlInicio ? 'Volviendo…' : 'Volver a RAI',
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.35),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _abrirFlujoPostViaje({
     required String viajeId,
     required String uid,
     Map<String, dynamic>? viajeDataSemilla,
   }) async {
+    ActiveTripService.marcarFlujoPostViajeCliente(viajeId);
     if (await CorporativoTaxistaService.debeOcultarEnAppClientePorId(
       viajeId,
       semilla: viajeDataSemilla,
@@ -2632,19 +3725,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       );
       return;
     }
-    try {
-      // Sin tope, un `set` colgado (offline / red inestable) dejaba al usuario
-      // en pantalla de carga o factura sin avanzar nunca.
-      await _limpiarActivoDelUsuario(uid).timeout(
-        const Duration(seconds: 12),
-        onTimeout: () {},
-      );
-    } catch (_) {}
-    if (!mounted) return;
-    setState(_limpiarCacheCierreViaje);
-    if (!mounted) return;
 
-    // Recibo + calificación en un solo flujo ([PostViajeClienteFlow]).
     if (_postViajeFlujoIniciadoParaViajeId == viajeId) return;
     if (ClientePostViajeReopenGuard.shouldSuppress(
       viajeId,
@@ -2659,13 +3740,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       return;
     }
 
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    _postViajeRequiereAccionManual = false;
+    _postViajeManualViajeId = null;
+    _postViajeManualSemilla = null;
     ClientePostViajeReopenGuard.markOpened(viajeId);
 
     if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
 
     try {
-      if (!context.mounted) return;
+      // Factura primero (navigator raíz): no depende del overlay del shell.
       await PostViajeClienteNav.abrirFacturaYFlujo(
         context: context,
         viajeId: viajeId,
@@ -2681,19 +3765,55 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       debugPrint('[PostViaje] navegación post-viaje falló: $e\n$st');
       _postViajeFlujoIniciadoParaViajeId = '';
       _navPostViajeParaId = null;
+      _postViajeRequiereAccionManual = true;
+      _postViajeManualViajeId = viajeId;
+      _postViajeManualSemilla = viajeDataSemilla != null
+          ? Map<String, dynamic>.from(viajeDataSemilla)
+          : null;
+      if (mounted) setState(() {});
+    } finally {
+      ActiveTripService.cancelarMantenimientoOverlayViaje();
+      try {
+        await ActiveTripService.prepararSalidaClienteAlInicio(
+          uid: uid,
+          viajeId: viajeId,
+          forzarLimpieza: true,
+        ).timeout(
+          const Duration(seconds: 12),
+          onTimeout: () {},
+        );
+      } catch (_) {}
+      if (mounted) setState(_limpiarCacheCierreViaje);
+    }
+  }
+
+  Future<void> _reintentarPostViajeManual() async {
+    final String viajeId = (_postViajeManualViajeId ?? '').trim();
+    if (viajeId.isEmpty || _abriendoFlujoPostViaje) return;
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    _postViajeRequiereAccionManual = false;
+    _navPostViajeParaId = viajeId;
+    _abriendoFlujoPostViaje = true;
+    try {
+      await _abrirFlujoPostViaje(
+        viajeId: viajeId,
+        uid: uid,
+        viajeDataSemilla: _postViajeManualSemilla,
+      );
+    } finally {
+      _abriendoFlujoPostViaje = false;
     }
   }
 
   bool _viajeClienteCompletadoParaPostViaje(Map<String, dynamic> d) {
     if (d['completado'] == true) return true;
-    final String st =
-        EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
     return st == EstadosViaje.completado;
   }
 
   bool _viajeClienteCanceladoORechazado(Map<String, dynamic> d) {
-    final String st =
-        EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
     if (st == EstadosViaje.cancelado || st == EstadosViaje.rechazado) {
       return true;
     }
@@ -2709,6 +3829,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     required String mensaje,
     bool mostrarBotonInicio = false,
   }) {
+    if (mostrarBotonInicio) {
+      _programarSalidaAutomaticaSinViaje();
+    }
     return ColoredBox(
       color: const Color(0xFF0A0A0A),
       child: SafeArea(
@@ -2718,66 +3841,106 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-            if (!mostrarBotonInicio)
-              const SizedBox(
-                width: 40,
-                height: 40,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: Colors.greenAccent,
-                ),
-              ),
-            if (!mostrarBotonInicio) const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Text(
-                mensaje,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 14,
-                  height: 1.35,
-                ),
-              ),
-            ),
-            if (mostrarBotonInicio) ...[
-              const SizedBox(height: 20),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _yendoAlInicio
-                        ? null
-                        : () => unawaited(_irAlInicioSeguro()),
-                    icon: _yendoAlInicio
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.home_rounded, size: 20),
-                    label: Text(
-                      _yendoAlInicio ? 'Volviendo…' : 'Volver al inicio',
+                if (!mostrarBotonInicio)
+                  const SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.greenAccent,
                     ),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      textStyle: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      elevation: 0,
+                  ),
+                if (!mostrarBotonInicio) const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(
+                    mensaje,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 14,
+                      height: 1.35,
                     ),
                   ),
                 ),
-              ),
-            ],
+                if (mostrarBotonInicio) ...[
+                  const SizedBox(height: 20),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _yendoAlInicio
+                            ? null
+                            : () => unawaited(
+                                  _irAlInicioSeguro(
+                                      forzarLimpiarViajeActivo: true),
+                                ),
+                        icon: _yendoAlInicio
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.home_rounded, size: 20),
+                        label: Text(
+                          _yendoAlInicio ? 'Volviendo…' : 'Volver al inicio',
+                        ),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 0,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (_postViajeRequiereAccionManual &&
+                    (_postViajeManualViajeId ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _abriendoFlujoPostViaje
+                            ? null
+                            : () => unawaited(_reintentarPostViajeManual()),
+                        icon: const Icon(Icons.receipt_long_rounded),
+                        label: const Text('Ver recibo del viaje'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _yendoAlInicio
+                            ? null
+                            : () => unawaited(
+                                  _irAlInicioSeguro(
+                                      forzarLimpiarViajeActivo: true),
+                                ),
+                        icon: const Icon(Icons.home_rounded),
+                        label: const Text('Volver al inicio'),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -2798,12 +3961,11 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     _salidaCierreIniciadaParaViajeId = id;
 
     print('[VIAJE_ACTIVO] cliente $origen: salida única tras cancelación $id');
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    ActiveTripService.liberarClienteTrasCancelacionOViajeTerminal(id);
     _stopClienteUbicacionEnViaje();
     _limpiarCacheCierreViaje();
 
-    final String canceladoPor =
-        (data['canceladoPor'] ?? '').toString().trim();
+    final String canceladoPor = (data['canceladoPor'] ?? '').toString().trim();
     final bool porConductor =
         canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado';
     final String estN =
@@ -2855,11 +4017,27 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
     if (!mounted) return;
     try {
-      await _irAlInicioSeguro();
+      await _irAlInicioSeguro(forzarLimpiarViajeActivo: true);
     } catch (_) {}
   }
 
-  /// Post-viaje solo si el viaje **completó**. Cancelado → inicio sin factura.
+  bool _viajeClienteSigueOperativoEnPantalla(Map<String, dynamic> data) {
+    if (_viajeClienteCompletadoParaPostViaje(data)) return false;
+    if (_viajeClienteCanceladoORechazado(data)) return false;
+    final String st =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (EstadosViaje.esAceptado(st) ||
+        EstadosViaje.esEnCaminoPickup(st) ||
+        EstadosViaje.esAbordo(st) ||
+        EstadosViaje.esEnCurso(st)) {
+      return true;
+    }
+    final String tid =
+        (data['uidTaxista'] ?? data['taxistaId'] ?? '').toString().trim();
+    // Claim en curso: el taxista ya está, el estado puede ir un snapshot atrasado.
+    return tid.isNotEmpty;
+  }
+
   void _manejarViajeCerradoSiCorresponde({
     required String viajeId,
     required String uid,
@@ -2869,9 +4047,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     if (_viajeIdCanceladoPorCliente == viajeId) {
       return;
     }
+    // Aceptación / pickup / a bordo / en curso: permanecer en viaje en curso.
+    if (_viajeClienteSigueOperativoEnPantalla(data)) {
+      return;
+    }
+    if (!_viajeClienteCompletadoParaPostViaje(data) &&
+        !_viajeClienteCanceladoORechazado(data)) {
+      return;
+    }
     if (_viajeClienteCompletadoParaPostViaje(data)) {
-      print(
-          '[VIAJE_ACTIVO] cliente $origen: viaje completado → post-viaje');
+      ActiveTripService.marcarFlujoPostViajeCliente(viajeId);
+      print('[VIAJE_ACTIVO] cliente $origen: viaje completado → post-viaje');
       _programarFlujoPostViaje(
         viajeId: viajeId,
         uid: uid,
@@ -2893,11 +4079,18 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
   Future<void> _salirTrasCancelacionExitosa() async {
     if (!mounted) return;
+    final String vidCancelado = (_viajeIdCanceladoPorCliente ?? '').trim();
+    if (vidCancelado.isNotEmpty) {
+      ActiveTripService.liberarClienteTrasCancelacionOViajeTerminal(
+        vidCancelado,
+      );
+    }
     setState(() {
       _cancelandoViajeCliente = false;
       _limpiarCacheCierreViaje();
     });
-    final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(context);
+    final ScaffoldMessengerState? messenger =
+        ScaffoldMessenger.maybeOf(context);
     messenger?.hideCurrentSnackBar();
     messenger?.showSnackBar(
       const SnackBar(
@@ -2909,7 +4102,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-    await _irAlInicioSeguro();
+    await _irAlInicioSeguro(forzarLimpiarViajeActivo: true);
     _viajeIdCanceladoPorCliente = null;
   }
 
@@ -2932,6 +4125,19 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
     _navPostViajeParaId = viajeId;
     _abriendoFlujoPostViaje = true;
+    ActiveTripService.marcarFlujoPostViajeCliente(viajeId);
+    _postViajeTimeoutTimer?.cancel();
+    _postViajeTimeoutTimer = Timer(const Duration(seconds: 18), () {
+      if (!mounted) return;
+      if (_postViajeFlujoIniciadoParaViajeId == viajeId) return;
+      if (_postViajeRequiereAccionManual) return;
+      _postViajeRequiereAccionManual = true;
+      _postViajeManualViajeId = viajeId;
+      _postViajeManualSemilla = viajeDataSemilla != null
+          ? Map<String, dynamic>.from(viajeDataSemilla)
+          : null;
+      setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         if (!mounted) return;
@@ -2941,6 +4147,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
           viajeDataSemilla: viajeDataSemilla,
         );
       } finally {
+        _postViajeTimeoutTimer?.cancel();
         _abriendoFlujoPostViaje = false;
       }
     });
@@ -2977,8 +4184,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     Map<String, dynamic> data, {
     required bool codigoVerificado,
   }) {
-    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
-    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (!MetodoPagoViaje.esTarjeta(_metodoPagoViaje(v, data))) return false;
+    if (_uidTaxistaDelViaje(v, data).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
     if (MetodoPagoViaje.tarjetaPagadoVerificado(data)) return false;
     if (codigoVerificado) return true;
@@ -2992,8 +4199,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     String estadoBase,
     Map<String, dynamic> data,
   ) {
-    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
-    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (!MetodoPagoViaje.esTarjeta(_metodoPagoViaje(v, data))) return false;
+    if (_uidTaxistaDelViaje(v, data).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
     if (MetodoPagoViaje.tarjetaPagadoVerificado(data)) return false;
     if (EstadosViaje.esAbordo(estadoBase) ||
@@ -3009,7 +4216,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     String estadoBase,
     Map<String, dynamic> data,
   ) {
-    if (!MetodoPagoViaje.esTarjeta(v.metodoPago)) return false;
+    if (!MetodoPagoViaje.esTarjeta(_metodoPagoViaje(v, data))) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
     return MetodoPagoViaje.tarjetaPagadoVerificado(data);
   }
@@ -3020,10 +4227,9 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     Map<String, dynamic> data, {
     required bool codigoVerificado,
   }) {
-    final String metodo =
-        (data['metodoPago'] ?? v.metodoPago).toString();
+    final String metodo = _metodoPagoViaje(v, data);
     if (!MetodoPagoViaje.esEfectivo(metodo)) return false;
-    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+    if (_uidTaxistaDelViaje(v, data).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
     if (!MetodoPagoViaje.cambioDesdeTarjetaAEfectivo(data)) return false;
     return codigoVerificado ||
@@ -3031,26 +4237,116 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         EstadosViaje.esEnCurso(estadoBase);
   }
 
-  /// Cuenta completa del conductor: desde abordo o en ruta (vida real, anti-fraude).
-  bool _mostrarDatosTransferenciaCliente(Viaje v, String estadoBase) {
-    if (!MetodoPagoViaje.esTransferencia(v.metodoPago)) return false;
-    if (_uidTaxistaDelViaje(v).isEmpty) return false;
+  String _metodoPagoViaje(Viaje v, Map<String, dynamic> data) {
+    return ClienteMetodoPagoViajeUi.resolver(
+      viajeId: v.id,
+      metodoRemoto: (data['metodoPago'] ?? v.metodoPago).toString(),
+    );
+  }
+
+  /// El selector ya guardó la elección en [ClienteMetodoPagoViajeUi]; aquí solo
+  /// se repinta el sheet (datos de transferencia, avisos de tarjeta, etc.).
+  void _aplicarMetodoPagoUiOptimista(String categoria) {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Widget _wrapSelectorMetodoPago({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoEfectivo,
+  }) {
+    if (!_mostrarSelectorMetodoPagoCliente(v, estadoEfectivo, data)) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: ViajeMetodoPagoSelector(
+        viajeId: v.id,
+        metodoPagoActual: (data['metodoPago'] ?? v.metodoPago).toString(),
+        fondoOscuro: true,
+        onMetodoSeleccionado: _aplicarMetodoPagoUiOptimista,
+      ),
+    );
+  }
+
+  List<Widget> _buildClienteBloqueTransferenciaActivaWidgets({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoEfectivo,
+  }) {
+    if (!_mostrarDatosTransferenciaCliente(v, estadoEfectivo, data)) {
+      return const <Widget>[];
+    }
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF10231A),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.greenAccent.withValues(alpha: 0.35),
+            ),
+          ),
+          child: Text(
+            EstadosViaje.esAbordo(estadoEfectivo) ||
+                    EstadosViaje.esEnCurso(estadoEfectivo)
+                ? 'Ya estás a bordo o en camino al destino. '
+                    'Transferí a la cuenta del conductor abajo y conservá el comprobante. '
+                    'Al cerrar el viaje verás la factura oficial.'
+                : 'Conductor asignado. Transferí a la cuenta de abajo '
+                    'cuando quieras; conservá el comprobante.',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+        ),
+      ),
+      _buildDatosBancarios(
+        v,
+        _uidTaxistaDelViaje(v, data),
+        v.precio,
+        data,
+      ),
+      const SizedBox(height: 12),
+    ];
+  }
+
+  /// Cuenta del conductor: en cuanto hay taxista asignado y pago transferencia.
+  bool _mostrarDatosTransferenciaCliente(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data,
+  ) {
+    if (!MetodoPagoViaje.esTransferencia(_metodoPagoViaje(v, data))) {
+      return false;
+    }
+    if (_uidTaxistaDelViaje(v, data).isEmpty) return false;
     if (EstadosViaje.esTerminal(estadoBase)) return false;
-    return EstadosViaje.esAbordo(estadoBase) ||
+    return EstadosViaje.esAceptado(estadoBase) ||
+        EstadosViaje.esEnCaminoPickup(estadoBase) ||
+        EstadosViaje.esAbordo(estadoBase) ||
         EstadosViaje.esEnCurso(estadoBase);
   }
 
-  /// Aviso previo: hay conductor pero aún no subió — sin números de cuenta.
-  bool _mostrarAvisoTransferenciaPreAbordo(Viaje v, String estadoBase) {
-    if (!MetodoPagoViaje.esTransferencia(v.metodoPago)) return false;
-    if (_uidTaxistaDelViaje(v).isEmpty) return false;
-    if (EstadosViaje.esTerminal(estadoBase)) return false;
-    if (EstadosViaje.esAbordo(estadoBase) ||
-        EstadosViaje.esEnCurso(estadoBase)) {
+  /// Sin conductor aún: aviso breve (sin números de cuenta).
+  bool _mostrarAvisoTransferenciaPreAbordo(
+    Viaje v,
+    String estadoBase,
+    Map<String, dynamic> data,
+  ) {
+    if (!MetodoPagoViaje.esTransferencia(_metodoPagoViaje(v, data))) {
       return false;
     }
-    return EstadosViaje.esAceptado(estadoBase) ||
-        EstadosViaje.esEnCaminoPickup(estadoBase);
+    if (_uidTaxistaDelViaje(v, data).isNotEmpty) return false;
+    if (EstadosViaje.esTerminal(estadoBase)) return false;
+    return EstadosViaje.esPendiente(estadoBase) ||
+        estadoBase.trim().toLowerCase() == 'pendiente_admin';
   }
 
   Future<void> _deleteOrCancelEstricto(Viaje v) async {
@@ -3250,7 +4546,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          SnackBar(content: Text(e.message ?? 'La cancelación tardó demasiado.')),
+          SnackBar(
+              content: Text(e.message ?? 'La cancelación tardó demasiado.')),
         );
       if (mounted) setState(() => _cancelandoViajeCliente = false);
       return;
@@ -3343,8 +4640,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     }
 
     _turismoRedirEsperaEnCurso = true;
-    final NavigatorState? navRoot =
-        Navigator.of(context, rootNavigator: true);
+    final NavigatorState? navRoot = Navigator.of(context, rootNavigator: true);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       try {
@@ -3358,58 +4654,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     });
   }
 
-  void _disposeDocWatch() {
-    _viajeDocSub?.cancel();
-    _viajeDocSub = null;
-  }
-
-  void _watchViajeDoc(String viajeId) {
-    if (_viajeDocSub != null && _lastRouteKey.startsWith('$viajeId|')) return;
-
-    _disposeDocWatch();
-
-    _viajeDocSub = FirebaseFirestore.instance
-        .collection('viajes')
-        .doc(viajeId)
-        .snapshots()
-        .distinct()
-        .listen((DocumentSnapshot<Map<String, dynamic>> ds) async {
-      if (!ds.exists) return;
-      final Map<String, dynamic> d = ds.data() ?? {};
-      final String estado = (d['estado'] ?? '').toString();
-      final String estN = EstadosViaje.normalizar(estado);
-
-      final String tid =
-          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
-
-      final bool tieneTaxista = tid.isNotEmpty;
-      final bool esEstadoValido = (estN == EstadosViaje.aceptado ||
-          estN == EstadosViaje.enCaminoPickup);
-      final bool esCambioEstado = _lastNotifiedState != estN;
-      final bool noEsPendiente =
-          estN != EstadosViaje.pendiente && estN != EstadosViaje.cancelado;
-
-      if (esEstadoValido && esCambioEstado && tieneTaxista && noEsPendiente) {
-        _lastNotifiedState = estN;
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Tu taxista va en camino 🚕'),
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-
-      // El conductor canceló → mensaje + salir de viaje en curso (no quedarse en pendiente).
-      _avisarSiConductorCancelo(d, estN, viajeId);
-
-      // Post-viaje (recibo + calificación): solo desde [_abrirFlujoPostViaje].
-      // `_postViajeFlujoIniciadoParaViajeId` evita abrir el flujo dos veces.
-      _intentarRedirigirEsperaTurismo(viajeId, d);
-      _syncTurismoReasignacion(viajeId, d);
-    }, onError: (Object _) {});
-  }
 
   /// Si el conductor cancela: una sola salida (sin bucle de streams).
   void _avisarSiConductorCancelo(
@@ -3451,154 +4695,425 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     });
   }
 
-  Widget _buildCodigoVerificacionClienteSection({
+  List<Widget> _buildClientePantallaAbordoWidgets({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoEfectivo,
     required String codigoVerificacion,
     required bool codigoVerificado,
-    required String estadoBase,
-    required bool mostrarCodigo,
-    required bool esMotor,
+    required bool mostrarCodigoCliente,
   }) {
-    final Color accentColor =
-        esMotor ? const Color(0xFFFF5A00) : Colors.purpleAccent;
-    final List<Color> gradientColors = esMotor
-        ? const [Color(0xFF3A1E0C), Color(0xFF251408)]
-        : const [Color(0xFF2A1338), Color(0xFF1B0F2E)];
-
-    if (mostrarCodigo) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(16),
+    return <Widget>[
+      const ClienteViajeProgresoStepper(pasoActivo: 3),
+      const SizedBox(height: 14),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: gradientColors,
+          gradient: const LinearGradient(
+            colors: <Color>[Color(0xFF1A2E1A), Color(0xFF0F1A12)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: accentColor, width: 1.6),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.45)),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
             Row(
-              children: [
-                Icon(Icons.verified_user_rounded, color: accentColor),
-                const SizedBox(width: 8),
-                const Expanded(
+              children: <Widget>[
+                Icon(Icons.airline_seat_recline_normal_rounded,
+                    color: Colors.greenAccent, size: 24),
+                SizedBox(width: 10),
+                Expanded(
                   child: Text(
-                    'Tu código de verificación',
+                    'Ya estás a bordo',
                     style: TextStyle(
                       color: Colors.white,
+                      fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      fontSize: 16,
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            SizedBox(height: 8),
             Text(
-              estadoBase == EstadosViaje.aBordo
-                  ? 'Compártelo con tu conductor para iniciar el viaje.'
-                  : 'Tenlo listo: tu conductor lo pedirá al subir al vehículo.',
-              style: const TextStyle(color: Colors.white70, height: 1.3),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.45),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: accentColor),
-              ),
-              child: Text(
-                codigoVerificacion,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 8,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: codigoVerificacion));
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Código copiado.')),
-                  );
-                },
-                icon: const Icon(Icons.copy_rounded, size: 18),
-                label: const Text(
-                  'Copiar código',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
+              'Dicta el código de 6 dígitos a tu conductor. Él lo ingresa en su '
+              'app para iniciar el viaje. Abajo eliges cómo pagar.',
+              style:
+                  TextStyle(color: Colors.white70, height: 1.4, fontSize: 13.5),
             ),
           ],
         ),
-      );
-    }
-
-    if (estadoBase == EstadosViaje.aBordo &&
-        !codigoVerificado &&
-        codigoVerificacion.isEmpty) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.orange.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+      ),
+      const SizedBox(height: 14),
+      _buildCodigoVerificacionClienteSection(
+        codigoVerificacion: codigoVerificacion,
+  codigoVerificado: codigoVerificado,
+  estadoBase: estadoEfectivo,
+  mostrarCodigo: mostrarCodigoCliente,
+  esMotor: v.esMotor,
+  viajeIdParaActualizar: v.id,
+),
+      _viajeSheetDivider('Forma de pago'),
+      _wrapSelectorMetodoPago(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+      ..._buildClienteBloqueTransferenciaActivaWidgets(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+      if (_mostrarPagoTarjetaCliente(
+        v,
+        estadoEfectivo,
+        data,
+        codigoVerificado: codigoVerificado,
+      )) ...[
+        RaiPagoTarjetaPanel(
+          viajeId: v.id,
+          viajeData: data,
+          montoRd: v.precio,
+          fondoOscuro: true,
+          role: 'cliente',
+          modoViajeEnCurso: true,
         ),
-        child: const Text(
-          'Estás a bordo, pero este viaje no muestra un código de verificación en la app. '
-          'Si el conductor lo necesita, contacta soporte.',
-          style: TextStyle(color: Colors.white70, height: 1.35),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-
-    if (codigoVerificado &&
-        (estadoBase == EstadosViaje.aBordo ||
-            estadoBase == EstadosViaje.enCurso)) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 16),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.greenAccent.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: Colors.greenAccent.withValues(alpha: 0.55),
+        const SizedBox(height: 12),
+      ] else if (MetodoPagoViaje.esTarjeta(_metodoPagoViaje(v, data))) ...[
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.deepPurpleAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Text(
+              PagoTarjetaClienteGate.bloqueado
+                  ? 'Pago con tarjeta (en desarrollo): por ahora usá efectivo o '
+                      'transferencia al conductor. Cuando AZUL esté activo podrás '
+                      'pagar aquí antes de llegar al destino.'
+                  : 'Pago con tarjeta: al verificar el código con el '
+                      'conductor podrás pagar desde aquí antes de llegar al destino.',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
           ),
         ),
-        child: const Row(
-          children: [
-            Icon(Icons.check_circle_rounded, color: Colors.greenAccent),
-            SizedBox(width: 10),
+      ],
+      const SizedBox(height: 8),
+      Row(
+        children: <Widget>[
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _llamarConductorCliente(v),
+              icon: const Icon(Icons.phone_rounded, size: 18),
+              label: const Text('Llamar'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _whatsAppConductorCliente(v),
+              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+              label: const Text('WhatsApp'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white70,
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+    ];
+  }
+
+  /// Pago durante pickup (conductor en camino): PIN + forma de pago.
+  List<Widget> _buildClienteSeccionPagoPickupWidgets({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoEfectivo,
+    required String codigoVerificacion,
+    required bool codigoVerificado,
+    required bool mostrarCodigoCliente,
+  }) {
+    return <Widget>[
+      _viajeSheetDivider('Forma de pago'),
+      _wrapSelectorMetodoPago(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+      if (_mostrarAvisoTarjetaPreAbordo(v, estadoEfectivo, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.deepPurpleAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Text(
+              PagoTarjetaClienteGate.bloqueado
+                  ? 'Pago con tarjeta (en desarrollo): al subir al vehículo verás el '
+                      'código. Por ahora elegí efectivo o transferencia al conductor.'
+                  : 'Pago con tarjeta: al subir al vehículo verás el código y podrás '
+                      'pagar con AZUL desde esta pantalla.',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      if (_mostrarAvisoTransferenciaPreAbordo(v, estadoEfectivo, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.amberAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: const Text(
+              'Pago por transferencia: al subir verás la cuenta del conductor '
+              'para transferirle directamente.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      ..._buildClienteBloqueTransferenciaActivaWidgets(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+    ];
+  }
+
+  List<Widget> _buildClienteSeccionPinYPagoWidgets({
+    required Viaje v,
+    required Map<String, dynamic> data,
+    required String estadoEfectivo,
+    required String codigoVerificacion,
+    required bool codigoVerificado,
+    required bool mostrarCodigoCliente,
+    required bool incluirTarjetaConductor,
+  }) {
+    return <Widget>[
+      if (incluirTarjetaConductor) ...[
+        _buildDriverCard(v, soloDatosConductor: true),
+        const SizedBox(height: 16),
+      ],
+      _buildCodigoVerificacionClienteSection(
+        codigoVerificacion: codigoVerificacion,
+  codigoVerificado: codigoVerificado,
+  estadoBase: estadoEfectivo,   
+  mostrarCodigo: mostrarCodigoCliente,
+  esMotor: v.esMotor,
+  viajeIdParaActualizar: v.id,
+),
+      _wrapSelectorMetodoPago(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+      if (_mostrarAvisoTarjetaPreAbordo(v, estadoEfectivo, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.deepPurpleAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Text(
+              PagoTarjetaClienteGate.bloqueado
+                  ? 'Pago con tarjeta (en desarrollo): cuando subas al vehículo '
+                      'verás el código. Por ahora usá efectivo o transferencia al conductor.'
+                  : 'Pago con tarjeta: cuando subas al vehículo y verifiques el código '
+                      'con el conductor, verás el botón para pagar desde la app.',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      if (_mostrarAvisoTransferenciaPreAbordo(v, estadoEfectivo, data))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1F2E),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.amberAccent.withValues(alpha: 0.35),
+              ),
+            ),
+            child: const Text(
+              'Pago por transferencia: en cuanto se asigne un conductor '
+              'verás aquí su cuenta bancaria para transferirle directamente.',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      ..._buildClienteBloqueTransferenciaActivaWidgets(
+        v: v,
+        data: data,
+        estadoEfectivo: estadoEfectivo,
+      ),
+      if (_mostrarPagoTarjetaCliente(
+        v,
+        estadoEfectivo,
+        data,
+        codigoVerificado: codigoVerificado,
+      )) ...[
+        const SizedBox(height: 12),
+        RaiPagoTarjetaPanel(
+          viajeId: v.id,
+          viajeData: data,
+          montoRd: v.precio,
+          fondoOscuro: true,
+          role: 'cliente',
+          modoViajeEnCurso: true,
+        ),
+        const SizedBox(height: 16),
+      ] else if (_mostrarTarjetaPagadaCliente(v, estadoEfectivo, data)) ...[
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF10231A),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.greenAccent.withValues(alpha: 0.45),
+            ),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.check_circle_outline, color: Colors.greenAccent),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Pago con tarjeta confirmado. '
+                  'Al finalizar el viaje verás tu recibo.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+      ] else if (_mostrarPagoEfectivoCliente(
+        v,
+        estadoEfectivo,
+        data,
+        codigoVerificado: codigoVerificado,
+      )) ...[
+        const SizedBox(height: 12),
+        EfectivoPagoClienteBanner(
+          montoRd: v.precio,
+          desdeTarjeta: true,
+        ),
+        const SizedBox(height: 16),
+      ],
+    ];
+  }
+
+
+  /// Ida y vuelta: el cliente pagó el regreso, así que tiene que ver en qué
+  /// tramo va y que el chofer está obligado a devolverlo.
+  Widget _bannerIdaYVuelta(Viaje v) {
+    if (!v.idaYVuelta) return const SizedBox.shrink();
+    if (!EstadosViaje.esEnCurso(_normEstadoViaje(v))) {
+      return const SizedBox.shrink();
+    }
+    final bool volviendo = v.regresoEnCurso;
+    if (!volviendo && !v.regresoPendiente) return const SizedBox.shrink();
+
+    final Color color =
+        volviendo ? Colors.lightBlueAccent : Colors.amberAccent;
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              volviendo ? Icons.u_turn_left_rounded : Icons.swap_horiz_rounded,
+              color: color,
+              size: 22,
+            ),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Código validado. Tu viaje está en marcha; sigue el avance en el mapa.',
+                volviendo
+                    ? 'De regreso a ${v.origen}. Este viaje incluye la vuelta.'
+                    : 'Viaje ida y vuelta: el regreso ya está pagado. '
+                        'Tu chofer te lleva de vuelta cuando estés listo.',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: color,
+                  fontSize: 13,
+                  height: 1.35,
                   fontWeight: FontWeight.w600,
-                  height: 1.28,
                 ),
               ),
             ),
           ],
         ),
-      );
-    }
-
-    return const SizedBox.shrink();
+      ),
+    );
   }
 
   // Widget de paradas
@@ -4426,196 +5941,201 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 ),
               ],
               if (!soloDatosConductor) ...[
-              const SizedBox(height: 12),
-              AnimatedBuilder(
-                animation: _progresoBrilloCtrl,
-                builder: (BuildContext context, Widget? _) {
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(14),
-                    onTap: _isValidCoord(v.latTaxista, v.lonTaxista)
-                        ? () => _centrarEnTaxista(v)
-                        : null,
-                    child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
-                    decoration: BoxDecoration(
+                const SizedBox(height: 12),
+                AnimatedBuilder(
+                  animation: _progresoBrilloCtrl,
+                  builder: (BuildContext context, Widget? _) {
+                    return InkWell(
                       borderRadius: BorderRadius.circular(14),
-                      color: Color.lerp(
-                        const Color(0xFF0E1F16),
-                        const Color(0xFF152B1F),
-                        _progresoBrilloCtrl.value,
-                      ),
-                      border: Border.all(
-                          color: Colors.greenAccent.withValues(alpha: 0.28)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.route_rounded,
-                            color: Colors.greenAccent.shade200, size: 22),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _lineaEtaPickupCliente(v, estCard),
-                            key: ValueKey<String>(
-                              '${v.latTaxista}_${v.lonTaxista}_${v.latCliente}_${v.lonCliente}_$estCard',
-                            ),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                              height: 1.3,
-                            ),
+                      onTap: _isValidCoord(v.latTaxista, v.lonTaxista)
+                          ? () => _centrarEnTaxista(v)
+                          : null,
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          color: Color.lerp(
+                            const Color(0xFF0E1F16),
+                            const Color(0xFF152B1F),
+                            _progresoBrilloCtrl.value,
                           ),
+                          border: Border.all(
+                              color:
+                                  Colors.greenAccent.withValues(alpha: 0.28)),
                         ),
-                      ],
-                    ),
-                  ),
-                  );
-                },
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: _actionButton(
-                      context,
-                      icon: Icons.phone,
-                      label: 'Llamar',
-                      onPressed: () async {
-                        final String raw = tel.trim().isNotEmpty
-                            ? tel
-                            : telefonoCrudoDesdeMapa(tx);
-                        final String tc = telefonoNormalizarDigitos(raw);
-                        if (tc.isEmpty) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.route_rounded,
+                                color: Colors.greenAccent.shade200, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _lineaEtaPickupCliente(v, estCard),
+                                key: ValueKey<String>(
+                                  '${v.latTaxista}_${v.lonTaxista}_${v.latCliente}_${v.lonCliente}_$estCard',
+                                ),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  height: 1.3,
+                                ),
                               ),
                             ),
-                          );
-                          return;
-                        }
-                        unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
-                          viajeId: v.id,
-                          tipo: 'llamada',
-                        ));
-                        await telefonoLaunchUri(telefonoUriLlamada(tc));
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _actionButton(
-                      context,
-                      icon: Icons.chat_bubble_outline,
-                      label: 'WhatsApp',
-                      onPressed: () async {
-                        final String raw = tel.trim().isNotEmpty
-                            ? tel
-                            : telefonoCrudoDesdeMapa(tx);
-                        final String tc = telefonoNormalizarDigitos(raw);
-                        if (tc.isEmpty) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _actionButton(
+                        context,
+                        icon: Icons.phone,
+                        label: 'Llamar',
+                        onPressed: () async {
+                          final String raw = tel.trim().isNotEmpty
+                              ? tel
+                              : telefonoCrudoDesdeMapa(tx);
+                          final String tc = telefonoNormalizarDigitos(raw);
+                          if (tc.isEmpty) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                                ),
                               ),
-                            ),
+                            );
+                            return;
+                          }
+                          unawaited(ViajeComunicacionRepo
+                              .notificarIntentoComunicacion(
+                            viajeId: v.id,
+                            tipo: 'llamada',
+                          ));
+                          await telefonoLaunchUri(telefonoUriLlamada(tc));
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _actionButton(
+                        context,
+                        icon: Icons.chat_bubble_outline,
+                        label: 'WhatsApp',
+                        onPressed: () async {
+                          final String raw = tel.trim().isNotEmpty
+                              ? tel
+                              : telefonoCrudoDesdeMapa(tx);
+                          final String tc = telefonoNormalizarDigitos(raw);
+                          if (tc.isEmpty) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Número del conductor no disponible aún. Usa el chat o espera unos segundos.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          unawaited(ViajeComunicacionRepo
+                              .notificarIntentoComunicacion(
+                            viajeId: v.id,
+                            tipo: 'whatsapp',
+                          ));
+                          const String waMsg = 'Hola, soy tu cliente de RAI.';
+                          if (await telefonoLaunchUri(
+                            telefonoUriWhatsAppApp(tc, waMsg),
+                          )) {
+                            return;
+                          }
+                          await telefonoLaunchUri(
+                            telefonoUriWhatsAppWeb(tc, waMsg),
                           );
-                          return;
-                        }
-                        unawaited(ViajeComunicacionRepo.notificarIntentoComunicacion(
-                          viajeId: v.id,
-                          tipo: 'whatsapp',
-                        ));
-                        const String waMsg = 'Hola, soy tu cliente de RAI.';
-                        if (await telefonoLaunchUri(
-                          telefonoUriWhatsAppApp(tc, waMsg),
-                        )) {
-                          return;
-                        }
-                        await telefonoLaunchUri(
-                          telefonoUriWhatsAppWeb(tc, waMsg),
-                        );
-                      },
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _actionButton(
+                        context,
+                        icon: Icons.chat,
+                        label: 'Chat',
+                        onPressed: () {
+                          final String uidTx = _uidTaxistaDelViaje(v);
+                          final String miUid =
+                              FirebaseAuth.instance.currentUser?.uid ?? '';
+                          unawaited(ChatViajeNav.abrir(
+                            context: context,
+                            miUid: miUid,
+                            otroUid: uidTx,
+                            otroNombre: nombre,
+                            viajeId: v.id,
+                          ));
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                if (v.uidTaxista.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  ViajeChatMensajesEnVivo(
+                    viajeId: v.id,
+                    miUid: FirebaseAuth.instance.currentUser?.uid ?? '',
+                    otroUid: v.uidTaxista,
+                    otroNombre: nombre,
+                  ),
+                ],
+                const SizedBox(height: 10),
+                if (_isValidCoord(v.latTaxista, v.lonTaxista)) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _centrarEnTaxista(v),
+                      icon: Icon(Icons.navigation, color: cs.primary),
+                      label: Text(
+                        'Ver conductor en tiempo real',
+                        style: TextStyle(color: cs.primary),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: cs.primary),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _actionButton(
-                      context,
-                      icon: Icons.chat,
-                      label: 'Chat',
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ChatScreen(
-                              otroUid: v.uidTaxista,
-                              otroNombre: nombre,
-                              viajeId: v.id,
-                            ),
-                          ),
-                        );
-                      },
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          unawaited(_openGoogleMapsVerUbicacionConductor(
+                        v.latTaxista,
+                        v.lonTaxista,
+                      )),
+                      icon:
+                          Icon(Icons.map_outlined, color: cs.onSurfaceVariant),
+                      label: Text(
+                        'Ver ubicación en Google Maps',
+                        style: TextStyle(
+                          color: cs.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: cs.outlineVariant),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
                 ],
-              ),
-              if (v.uidTaxista.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                ViajeChatMensajesEnVivo(
-                  viajeId: v.id,
-                  miUid: FirebaseAuth.instance.currentUser?.uid ?? '',
-                  otroUid: v.uidTaxista,
-                  otroNombre: nombre,
-                ),
-              ],
-              const SizedBox(height: 10),
-              if (_isValidCoord(v.latTaxista, v.lonTaxista)) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _centrarEnTaxista(v),
-                    icon: Icon(Icons.navigation, color: cs.primary),
-                    label: Text(
-                      'Ver conductor en tiempo real',
-                      style: TextStyle(color: cs.primary),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: cs.primary),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => unawaited(_openGoogleMapsVerUbicacionConductor(
-                          v.latTaxista,
-                          v.lonTaxista,
-                        )),
-                    icon: Icon(Icons.map_outlined, color: cs.onSurfaceVariant),
-                    label: Text(
-                      'Ver ubicación en Google Maps',
-                      style: TextStyle(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: cs.outlineVariant),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ],
               ],
             ],
           ),
@@ -4635,9 +6155,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
+        splashColor: cs.primary.withValues(alpha: 0.12),
+        highlightColor: cs.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
           decoration: BoxDecoration(
             border: Border.all(color: cs.outlineVariant),
             borderRadius: BorderRadius.circular(12),
@@ -4759,8 +6282,10 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
         builder: (_) {
           final String estadoPago =
               (viajeData['estadoPago'] ?? '').toString().trim().toLowerCase();
-          final String paymentStatus =
-              (viajeData['payment']?['status'] ?? '').toString().trim().toLowerCase();
+          final String paymentStatus = (viajeData['payment']?['status'] ?? '')
+              .toString()
+              .trim()
+              .toLowerCase();
           final String comprobante =
               (viajeData['comprobanteTransferenciaUrl'] ?? '').toString();
           final String motivoRechazo =
@@ -4840,24 +6365,39 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final User? u = FirebaseAuth.instance.currentUser;
+ @override
+Widget build(BuildContext context) {
+  final User? u = FirebaseAuth.instance.currentUser;
 
-    return FlygoSalidaSegura(
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        appBar: RaiAppBar(
-          title: 'Mi viaje en curso',
-          backWhenCanPop: true,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white70),
-              onPressed: () => setState(() {}),
-            ),
-          ],
+return PopScope(
+  canPop: false,
+  onPopInvokedWithResult: (bool didPop, Object? result) {
+    if (didPop ||
+        _yendoAlInicio ||
+        _suprimirPopScopeAutomatico ||
+        ActiveTripService.retomarClienteEnCurso ||
+        ActiveTripService.pausaClienteBloqueadaPorRetomar()) {
+      return;
+    }
+    print('[VIAJE_ACTIVO] PopScope back → viaje pegado (sin pausa)');
+    _avisoViajeSigueActivo();
+  },
+  child: Scaffold(
+      backgroundColor: Colors.black,
+      appBar: RaiAppBar(
+        title: 'Mi viaje en curso',
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70),
+          onPressed: _yendoAlInicio ? null : _avisoViajeSigueActivo,
         ),
-        body: (u == null)
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white70),
+            onPressed: () => setState(() {}),
+          ),
+        ],
+      ),
+      body: (u == null)
           ? const Center(
               child: Text('Inicia sesión para ver tu viaje.',
                   style: TextStyle(color: Colors.white70)),
@@ -4869,174 +6409,283 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                   .snapshots()
                   .distinct(),
               builder: (context, userSnap) {
-                if (userSnap.connectionState == ConnectionState.waiting &&
-                    !userSnap.hasData) {
-                  return _cargaLinealOscura();
-                }
-                if (userSnap.hasError ||
-                    !userSnap.hasData ||
-                    !userSnap.data!.exists) {
-                  return _bodySinViajeActivo(
-                      mensaje: 'No tienes viaje activo.');
+                final bool usuarioStreamFallo = userSnap.hasError;
+                if (!usuarioStreamFallo) {
+                  if (userSnap.connectionState == ConnectionState.waiting &&
+                      !userSnap.hasData) {
+                    return _cargaLinealOscura();
+                  }
+                  if (!userSnap.hasData || !userSnap.data!.exists) {
+                    return _bodySinViajeActivo(
+                        mensaje: 'No tienes viaje activo.');
+                  }
+                } else if (userSnap.connectionState ==
+                    ConnectionState.waiting) {
+                  return _cargaLinealOscura(
+                    mensaje: 'Conectando con tu viaje…',
+                  );
                 }
 
                 final Map<String, dynamic> userData =
-                    userSnap.data!.data() ?? {};
-                final String activoId =
-                    (userData['viajeActivoId'] ?? '').toString();
+                    userSnap.hasData && userSnap.data!.exists
+                        ? (userSnap.data!.data() ?? <String, dynamic>{})
+                        : <String, dynamic>{};
+                final String viajeIdUsuario =
+                    (userData['viajeActivoId'] ?? '').toString().trim();
+                String viajeIdSeguimiento = viajeIdUsuario;
+                if (viajeIdSeguimiento.isEmpty) {
+                  viajeIdSeguimiento = _lastNonEmptyViajeActivoId.trim();
+                }
+                if (viajeIdSeguimiento.isEmpty) {
+                  viajeIdSeguimiento =
+                      ActiveTripService.viajeOperativoClienteConocido;
+                }
+                if (viajeIdSeguimiento.isEmpty) {
+                  viajeIdSeguimiento =
+                      ActiveTripService.viajeIdPausaVoluntariaCliente;
+                }
 
-                if (activoId.isEmpty) {
+                if (viajeIdSeguimiento.isEmpty) {
                   _disposeDocWatch();
                   _stopClienteUbicacionEnViaje();
-                  final String lost = _lastNonEmptyViajeActivoId;
-
-                  if (lost.isNotEmpty) {
-                    DocumentSnapshot<Map<String, dynamic>>? docSnap =
-                        _viajeCierreDocSnap;
-                    if (docSnap == null || docSnap.id != lost) {
-                      final String fetchKey = '${u.uid}|$lost';
-                      if (_viajeCierreFetchKey != fetchKey) {
-                        _viajeCierreFetchKey = fetchKey;
-                        WidgetsBinding.instance.addPostFrameCallback((_) async {
-                          try {
-                            final DocumentSnapshot<Map<String, dynamic>> d =
-                                await FirebaseFirestore.instance
-                                    .collection('viajes')
-                                    .doc(lost)
-                                    .get();
-                            if (!mounted) return;
-                            setState(() => _viajeCierreDocSnap = d);
-                          } catch (_) {
-                            if (mounted) {
-                              setState(() => _viajeCierreFetchKey = null);
-                            }
-                          }
-                        });
-                      }
-                      docSnap = _viajeCierreDocSnap;
-                    }
-
-                    if (docSnap != null &&
-                        docSnap.exists &&
-                        docSnap.id == lost) {
-                      final Map<String, dynamic> d =
-                          docSnap.data() ?? <String, dynamic>{};
-                      if (_viajeClienteCompletadoParaPostViaje(d)) {
-                        _programarFlujoPostViaje(
-                          viajeId: docSnap.id,
-                          uid: u.uid,
-                          viajeDataSemilla:
-                              Map<String, dynamic>.from(d),
-                        );
-                        return _pantallaTransicionCierre(
-                          mensaje: 'Preparando resumen del viaje…',
-                        );
-                      }
-                      if (_viajeClienteCanceladoORechazado(d)) {
-                        _manejarViajeCerradoSiCorresponde(
-                          viajeId: docSnap.id,
-                          uid: u.uid,
-                          data: d,
-                          origen: 'activoIdVacio',
-                        );
-                        return _pantallaTransicionCierre(
-                          mensaje: 'Viaje cancelado. Volviendo al inicio…',
-                          mostrarBotonInicio: true,
-                        );
-                      }
-                    }
-
-                    if (docSnap == null ||
-                        !docSnap.exists ||
-                        docSnap.id != lost) {
-                      return _cargaLinealOscura();
-                    }
+                  if (ActiveTripService.viajeOperativoClienteConocido.isNotEmpty) {
+                    return _cargaLinealOscura(
+                      mensaje: 'Conectando con tu viaje…',
+                    );
                   }
-
                   return _bodySinViajeActivo(
                     mensaje: 'No tienes viaje activo en este momento.',
                   );
                 }
 
+                // Si `viajeActivoId` se borró por error pero el viaje sigue (p. ej. taxista
+                // marcó abordo), seguimos escuchando Firestore en tiempo real y reparamos el enlace.
+                if (viajeIdUsuario.isEmpty) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    unawaited(
+                      ActiveTripService.repararViajeActivoClienteSiHuerfano(
+                        u.uid,
+                        viajeIdHint: viajeIdSeguimiento,
+                      ),
+                    );
+                  });
+                }
+
                 if (_viajeCierreDocSnap != null &&
-                    _viajeCierreDocSnap!.id != activoId) {
+                    _viajeCierreDocSnap!.id != viajeIdSeguimiento) {
                   _viajeCierreDocSnap = null;
                   _viajeCierreFetchKey = null;
                 }
                 if (_lastNonEmptyViajeActivoId.isNotEmpty &&
-                    _lastNonEmptyViajeActivoId != activoId) {
+                    _lastNonEmptyViajeActivoId != viajeIdSeguimiento) {
                   _navPostViajeParaId = null;
                   _lastViajeUiCache = null;
                 }
-                _lastNonEmptyViajeActivoId = activoId;
+                _lastNonEmptyViajeActivoId = viajeIdSeguimiento;
 
                 return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
                       .collection('viajes')
-                      .doc(activoId)
-                      .snapshots()
-                      .distinct((DocumentSnapshot<Map<String, dynamic>> a,
-                              DocumentSnapshot<Map<String, dynamic>> b) =>
-                          _viajeDocMapUiSig(a) == _viajeDocMapUiSig(b)),
+                      .doc(viajeIdSeguimiento)
+                      .snapshots(includeMetadataChanges: true),
                   builder: (context, vSnap) {
+                    if (ActiveTripService.flujoPostViajeClienteBloquea(
+                      viajeIdSeguimiento,
+                    )) {
+                      return const SizedBox.shrink();
+                    }
                     // Mantener el último frame del viaje (mapa) si el stream reconecta.
                     if (vSnap.connectionState == ConnectionState.waiting &&
                         !vSnap.hasData) {
-                      if (_lastViajeUiCache != null) {
-                        // cae al flujo normal abajo usando cache — no pantalla negra
-                      } else {
-                        return _cargaLinealOscura();
+                      final bool tieneDatosLocales =
+                          _lastViajeUiCache != null ||
+                              (_viajeDatosOfflineId == viajeIdSeguimiento &&
+                                  _viajeDatosOffline != null) ||
+                              (_syncPulseViajeId == viajeIdSeguimiento &&
+                                  _syncPulseViajeData != null);
+                      if (!tieneDatosLocales) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          unawaited(_bootstrapViajeClienteAlAbrir());
+                        });
+                        return _cargaViajeConEscape(
+                          mensaje: 'Conectando con tu viaje…',
+                          viajeId: viajeIdSeguimiento,
+                        );
                       }
                     }
 
-                    if ((vSnap.hasError ||
-                            !vSnap.hasData ||
-                            !vSnap.data!.exists) &&
-                        _lastViajeUiCache == null) {
+                    if (vSnap.hasData &&
+                        vSnap.data != null &&
+                        !vSnap.data!.exists) {
+                      _lastViajeUiCache = null;
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
-                        await _limpiarActivoDelUsuario(u.uid);
+                        if (!mounted) return;
+                        bool ausente = false;
+                        try {
+                          final DocumentSnapshot<Map<String, dynamic>>
+                              server = await FirebaseFirestore.instance
+                                  .collection('viajes')
+                                  .doc(viajeIdSeguimiento)
+                                  .get(const GetOptions(
+                                      source: Source.server));
+                          ausente = !server.exists;
+                        } catch (_) {
+                          ausente = await ActiveTripService
+                              .confirmarViajeAusenteEnFirestore(
+                            viajeIdSeguimiento,
+                            uid: u.uid,
+                          );
+                        }
+                        if (!mounted || !ausente) return;
+                        unawaited(_salirTrasViajeDesaparecido(
+                          viajeId: viajeIdSeguimiento,
+                          uid: u.uid,
+                          origen: 'streamViajeEliminado',
+                        ));
                       });
-                      return _bodySinViajeActivo(
+                      return _pantallaTransicionCierre(
                         mensaje:
-                            'No tienes viaje activo en este momento.',
+                            'El viaje ya no está disponible. Volviendo al inicio…',
+                        mostrarBotonInicio: true,
                       );
                     }
 
-                    final DocumentSnapshot<Map<String, dynamic>> docViaje =
-                        (vSnap.hasData &&
+                    if ((vSnap.hasError || !vSnap.hasData) &&
+                        _lastViajeUiCache == null &&
+                        !(_viajeDatosOfflineId == viajeIdSeguimiento &&
+                            _viajeDatosOffline != null) &&
+                        !(_syncPulseViajeId == viajeIdSeguimiento &&
+                            _syncPulseViajeData != null)) {
+                      if (ActiveTripService.viajeClienteDescartadoEnSesion(
+                        viajeIdSeguimiento,
+                      )) {
+                        return _bodySinViajeActivo(
+                          mensaje: 'No tienes viaje activo en este momento.',
+                        );
+                      }
+                      if (vSnap.hasError &&
+                          _esPermisoDenegadoFirestore(vSnap.error)) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          unawaited(_bootstrapViajeClienteAlAbrir());
+                        });
+                      }
+                      final bool tieneDatosLocales =
+                          (_viajeDatosOfflineId == viajeIdSeguimiento &&
+                              _viajeDatosOffline != null) ||
+                          (_syncPulseViajeId == viajeIdSeguimiento &&
+                              _syncPulseViajeData != null);
+                      if (!tieneDatosLocales) {
+                        if (vSnap.hasError &&
+                            _esPermisoDenegadoFirestore(vSnap.error)) {
+                          return _bodyViajeSincronizacionLimitada(
+                            viajeId: viajeIdSeguimiento,
+                            mensaje: 'Sincronizando tu viaje…',
+                          );
+                        }
+                        return _cargaViajeConEscape(
+                          mensaje: 'Conectando con tu viaje…',
+                          viajeId: viajeIdSeguimiento,
+                        );
+                      }
+                    }
+
+                    final DocumentSnapshot<Map<String, dynamic>>?
+                        docViajeRaw = (vSnap.hasData &&
                                 vSnap.data != null &&
                                 vSnap.data!.exists)
-                            ? vSnap.data!
-                            : _lastViajeUiCache!;
+                            ? vSnap.data
+                            : _lastViajeUiCache;
+                    final bool usarDatosOffline =
+                        (docViajeRaw == null || !docViajeRaw.exists) &&
+                            _viajeDatosOfflineId == viajeIdSeguimiento &&
+                            _viajeDatosOffline != null;
+                    final bool usarPulso =
+                        (docViajeRaw == null || !docViajeRaw.exists) &&
+                            !usarDatosOffline &&
+                            _syncPulseViajeId == viajeIdSeguimiento &&
+                            _syncPulseViajeData != null;
+                    if ((docViajeRaw == null || !docViajeRaw.exists) &&
+                        !usarDatosOffline &&
+                        !usarPulso) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        unawaited(_bootstrapViajeClienteAlAbrir());
+                      });
+                      return _cargaViajeConEscape(
+                        mensaje: 'Conectando con tu viaje…',
+                        viajeId: viajeIdSeguimiento,
+                      );
+                    }
+                    final String viajeDocId = (docViajeRaw != null &&
+                            docViajeRaw.exists)
+                        ? docViajeRaw.id
+                        : viajeIdSeguimiento;
+                    final Map<String, dynamic> streamDataBase =
+                        Map<String, dynamic>.from(
+                      docViajeRaw != null && docViajeRaw.exists
+                          ? (docViajeRaw.data() ?? <String, dynamic>{})
+                          : usarDatosOffline
+                              ? _viajeDatosOffline!
+                              : _syncPulseViajeData!,
+                    );
+                    if (_sheetFaseUiViajeId != null &&
+                        _sheetFaseUiViajeId != viajeDocId) {
+                      _sheetFaseUiViajeId = null;
+                      _sheetAutoExpandFaseClave = null;
+                      _sheetUltimoExpandSigProgramado = null;
+                      _sheetFaseUiEsAbordo = false;
+                      _sheetAbordoColapsoUsuario = false;
+                      _sheetExpandPendienteTarget = null;
+                      _sheetPinAbordoExpandSig = null;
+                      _pinAbordoLiveViajeId = null;
+                      _snackPinAbordoLiveMostrado = null;
+                    }
                     if (vSnap.hasData &&
                         vSnap.data != null &&
                         vSnap.data!.exists) {
                       _lastViajeUiCache = vSnap.data;
                     }
 
-                    final Map<String, dynamic> data = docViaje.data() ?? {};
-                    _intentarRedirigirEsperaTurismo(docViaje.id, data);
-                    if (ClientePantallaViajeActivo.debeMostrarEsperaTurismo(data)) {
-                      return _pantallaTransicionCierre(
-                        mensaje: widget.delegarEsperaTurismoAlRouter
-                            ? 'Buscando chofer turístico…'
-                            : 'Volviendo a asignación turística…',
-                      );
-                    }
+                    _startClienteViajeSyncPulse(viajeDocId);
+
+                    final Map<String, dynamic> streamData =
+                        Map<String, dynamic>.from(streamDataBase);
+                    _maybeForzarPulseServidorPorStreamAtrasado(
+                      viajeId: viajeDocId,
+                      streamData: streamData,
+                    );
+
+                    final Map<String, dynamic> data =
+                        _mergeViajeDataConPulsoServidor(
+                      viajeDocId,
+                      streamData,
+                    );
+                    _encolarAbordoPinEnVivoDesdeBuild(
+                      viajeId: viajeDocId,
+                      d: data,
+                    );
+                    _syncTurismoReasignacion(viajeDocId, data);
 
                     final Viaje v;
                     try {
                       v = Viaje.fromMap(
-                        docViaje.id,
+                        viajeDocId,
                         Map<String, dynamic>.from(data),
                       );
                     } catch (e, st) {
                       debugPrint(
                         '[VIAJE_ACTIVO] cliente Viaje.fromMap: $e\n$st',
                       );
-                      return _cargaLinealOscura(
-                        mensaje:
-                            'Cargando datos del viaje… Si no abre, toca actualizar.',
+                      return _ClienteCargaViajeGate(
+                        mensaje: 'Cargando datos del viaje…',
+                        onVolverInicio: () => unawaited(
+                          _irAlInicioSeguro(forzarLimpiarViajeActivo: true),
+                        ),
+                        onReintentar: () {
+                          if (!mounted) return;
+                          setState(() {
+                            _lastViajeUiCache = null;
+                          });
+                        },
                       );
                     }
 
@@ -5045,16 +6694,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     if (uidClienteViaje.isNotEmpty &&
                         uidClienteViaje != u.uid) {
                       WidgetsBinding.instance.addPostFrameCallback((_) async {
+                        ActiveTripService.prepararSalidaClientePostViaje(
+                          viajeId: viajeIdSeguimiento,
+                        );
                         await _limpiarActivoDelUsuario(u.uid);
                       });
                       return _bodySinViajeActivo(
-                        mensaje:
-                            'No tienes viaje activo en este momento.',
+                        mensaje: 'No tienes viaje activo en este momento.',
                       );
                     }
 
                     _watchViajeDoc(v.id);
-                    _watchBolaPickupDoc(data);
 
                     if (_multiNavLoadedForViajeId != v.id) {
                       _multiNavLoadedForViajeId = v.id;
@@ -5074,14 +6724,17 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   ? EstadosViaje.aceptado
                                   : EstadosViaje.pendiente)),
                     );
+                    final String estadoEfectivo =
+                        _estadoEfectivoFlujoCliente(v, data);
 
                     if (_viajeClienteCompletadoParaPostViaje(data)) {
+                      ActiveTripService.marcarFlujoPostViajeCliente(v.id);
+                      _stopClienteViajeSyncPulse();
                       _stopClienteUbicacionEnViaje();
                       _programarFlujoPostViaje(
                         viajeId: v.id,
                         uid: u.uid,
-                        viajeDataSemilla:
-                            Map<String, dynamic>.from(data),
+                        viajeDataSemilla: Map<String, dynamic>.from(data),
                       );
                       return _pantallaTransicionCierre(
                         mensaje: 'Preparando resumen del viaje…',
@@ -5102,6 +6755,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         mostrarBotonInicio: true,
                       );
                     }
+
+                    // Viaje propio, no terminal: libera el candado post-viaje
+                    // si venía de un viaje anterior (shell y PIN de abordaje).
+                    ActiveTripService.registrarViajeOperativoCliente(v.id);
+                    ActiveTripService.mantenerOverlayViajeEnShell(
+                      NavigationService.kOverlayClienteViajeActivo,
+                    );
 
                     // Ubicación del cliente en Firestore en tiempo real durante el viaje activo.
                     _ensureClienteUbicacionEnViaje(v.id);
@@ -5133,16 +6793,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                     }
 
                     final bool faseRecogidaTaxista =
-                        RaiMapVehicleIcons.faseRecogidaDesdeEstado(estadoBase);
+                        RaiMapVehicleIcons.faseRecogidaDesdeEstado(
+                            estadoEfectivo);
                     if (v.uidTaxista.isNotEmpty &&
                         _isValidCoord(v.latTaxista, v.lonTaxista)) {
                       _syncTaxistaAnimador(v);
                     }
-                    final LatLng? posTaxistaMapa =
-                        v.uidTaxista.isNotEmpty &&
-                                _isValidCoord(v.latTaxista, v.lonTaxista)
-                            ? _posTaxistaAnimada(v)
-                            : null;
+                    final LatLng? posTaxistaMapa = v.uidTaxista.isNotEmpty &&
+                            _isValidCoord(v.latTaxista, v.lonTaxista)
+                        ? _posTaxistaAnimada(v)
+                        : null;
                     final BitmapDescriptor? iconoTaxistaAsignado =
                         v.uidTaxista.isNotEmpty &&
                                 _isValidCoord(v.latTaxista, v.lonTaxista)
@@ -5182,7 +6842,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           zIndexInt: 5,
                         ),
                       ..._paradasIntermediasResueltas(v).asMap().entries.map(
-                        (MapEntry<int, ({double lat, double lon, String label})>
+                        (MapEntry<int,
+                                ({double lat, double lon, String label})>
                             e) {
                           return Marker(
                             markerId: MarkerId('parada_${e.key}'),
@@ -5251,7 +6912,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         driversSortedMapa = esperandoTaxista &&
                                 _isValidCoord(v.latCliente, v.lonCliente)
                             ? _conductoresCercaPickup(v)
-                            : const <DocumentSnapshot<Map<String, dynamic>>>[];
+                            : const <DocumentSnapshot<
+                                Map<String, dynamic>>>[];
 
                     if (esperandoTaxista) {
                       for (final DocumentSnapshot<Map<String, dynamic>> doc
@@ -5265,12 +6927,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           final double? heading = (docData?['heading'] is num)
                               ? (docData!['heading'] as num).toDouble()
                               : null;
-                          final bool enViaje =
-                              (docData?['viajeId'] ?? '').toString().trim().isNotEmpty;
+                          final bool enViaje = (docData?['viajeId'] ?? '')
+                              .toString()
+                              .trim()
+                              .isNotEmpty;
                           final LatLng pos = _poolDriverAnim
                                   .displayPositions[doc.id] ??
                               LatLng(location.latitude, location.longitude);
-                          final double poolHeading = _poolDriverAnim.bearingFor(
+                          final double poolHeading =
+                              _poolDriverAnim.bearingFor(
                             doc.id,
                             fallback: heading ?? 0,
                           );
@@ -5301,46 +6966,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                       }
                     }
 
-                    // Banner / pulso / FABs: conductor yendo al pickup o en viaje al destino.
+                    // Banner / FABs: conductor yendo al pickup o en viaje al destino.
                     final bool pulsoTaxistaEnMapa = v.uidTaxista.isNotEmpty &&
                         _isValidCoord(v.latTaxista, v.lonTaxista) &&
                         (estadoBase == EstadosViaje.aceptado ||
                             estadoBase == EstadosViaje.enCaminoPickup ||
                             estadoBase == EstadosViaje.enCurso);
-                    if (pulsoTaxistaEnMapa && posTaxistaMapa != null) {
-                      final LatLng txPos = posTaxistaMapa;
-                      final bool pulsoRecogida = faseRecogidaTaxista;
-                      final Color pulsoFill = pulsoRecogida
-                          ? const Color(0x44E53935)
-                          : const Color(0x44FFB020);
-                      final Color pulsoStroke = pulsoRecogida
-                          ? const Color(0xFFE53935)
-                          : const Color(0xFFFFB020);
-                      circles.add(
-                        Circle(
-                          circleId: const CircleId('taxista_pulse_inner'),
-                          center: txPos,
-                          radius: 120,
-                          fillColor: pulsoFill,
-                          strokeColor: pulsoStroke,
-                          strokeWidth: 2,
-                        ),
-                      );
-                      circles.add(
-                        Circle(
-                          circleId: const CircleId('taxista_pulse_outer'),
-                          center: txPos,
-                          radius: 220,
-                          fillColor: pulsoRecogida
-                              ? const Color(0x22E53935)
-                              : const Color(0x22FFB020),
-                          strokeColor: pulsoRecogida
-                              ? const Color(0x99E53935)
-                              : const Color(0x99FFB020),
-                          strokeWidth: 1,
-                        ),
-                      );
-                    }
 
                     final LatLng initialTarget =
                         _isValidCoord(v.latCliente, v.lonCliente)
@@ -5380,43 +7011,67 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           .addPostFrameCallback((_) => _fitBoundsFor(v));
                     }
 
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (!mounted) return;
-                      _maybeColapsarSheetPickupNav(v, estadoBase);
-                      _maybeAnimarCamaraAlTaxista(v, estadoBase);
-                      _schedulePickupEtaRefresh(v, estadoBase);
-                    });
-
                     final bool cancelarHabilitado =
                         EstadosViaje.clientePuedeCancelarViajeDesdeApp(
-                            estadoBase);
+                            estadoEfectivo);
                     final String codigoVerificacion =
                         _codigoVerificacionDesdeDoc(v, data);
-                    final bool codigoVerificado = v.codigoVerificado;
-                    final bool mostrarCodigoCliente =
-                        _clienteDebeMostrarCodigoVerificacion(
-                      v,
-                      estadoBase,
-                      codigoVerificacion,
-                      data,
-                    );
+                    final bool codigoVerificado =
+                        _codigoVerificadoEnDoc(v, data);
+                   final bool mostrarCodigoCliente =
+  (_pinAbordoLiveViajeId == v.id && !codigoVerificado) ||
+  _clienteDebeMostrarCodigoVerificacion(
+    v,
+    estadoBase,
+    codigoVerificacion,
+    data,
+  ) ||
+  (_clienteAbordoEnViajeDoc(data, v) && !codigoVerificado);
+                    _solicitarEnsureCodigoSiFalta(
+                        v, codigoVerificacion, data);
                     final String? orientacionFlujo =
                         _mensajeOrientacionCliente(
                       v,
-                      estadoBase,
+                      estadoEfectivo,
                       mostrarCodigoCliente: mostrarCodigoCliente,
                     );
 
                     final bool esperandoConductor = v.uidTaxista.isEmpty &&
                         (estadoBase == EstadosViaje.pendiente ||
                             estadoBase == EstadosViaje.pendientePago ||
-                            v.esTurismo);
-                    final bool panelConductorAsignado = v.uidTaxista.isNotEmpty &&
-                        !v.esTurismo &&
-                        !EstadosViaje.esTerminal(estadoBase);
+                            estadoBase == 'pendiente_admin' ||
+                            (v.esTurismo &&
+                                !widget.delegarEsperaTurismoAlRouter));
+                    final bool panelConductorAsignado =
+                        v.uidTaxista.isNotEmpty &&
+                            !EstadosViaje.esTerminal(estadoEfectivo);
                     final bool fasePickupConductor = panelConductorAsignado &&
-                        (estadoBase == EstadosViaje.aceptado ||
-                            estadoBase == EstadosViaje.enCaminoPickup);
+                        !codigoVerificado &&
+                        (estadoEfectivo == EstadosViaje.aceptado ||
+                            estadoEfectivo == EstadosViaje.enCaminoPickup);
+                    final bool faseEnRuta = panelConductorAsignado &&
+                        codigoVerificado &&
+                        EstadosViaje.esEnCurso(estadoEfectivo);
+                    final bool faseAbordoPin = panelConductorAsignado &&
+                        (EstadosViaje.esAbordo(estadoEfectivo) ||
+                            _clienteAbordoEnViajeDoc(data, v) ||
+                            _pinAbordoLiveViajeId == v.id) &&
+                        !codigoVerificado;
+                    _faseAbordoPinUiCache = faseAbordoPin;
+                    final bool mostrarBotonTocaPin =
+                        panelConductorAsignado &&
+                            !codigoVerificado &&
+                            (fasePickupConductor || faseAbordoPin);
+                    final bool mostrarBotonTocaPinGrande =
+                        mostrarBotonTocaPin &&
+                            (fasePickupConductor || !mostrarCodigoCliente);
+                    final bool mostrarBotonTocaPinEnMapa =
+                        mostrarBotonTocaPin && !mostrarCodigoCliente;
+                    _ajustarSyncPulseParaFaseAbordoPin(
+                      viajeId: v.id,
+                      esperandoPinAbordo: faseAbordoPin,
+                      codigoVerificado: codigoVerificado,
+                    );
                     final DateTime inicioEsperaBusqueda =
                         ViajeEsperaTiempoResolver.inicioBusqueda(data);
                     final DateTime inicioCaminoConductor =
@@ -5425,34 +7080,152 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                         ? _kViajeSheetEsperaConductor
                         : (fasePickupConductor
                             ? _kViajeSheetPickupCompact
-                            : _kViajeSheetInitial);
-                    final List<double> sheetSnapSizes = esperandoConductor
-                        ? <double>[
-                            _kViajeSheetMin,
-                            _kViajeSheetEsperaConductor,
-                            0.68,
-                            0.88,
-                          ]
-                        : fasePickupConductor
-                            ? <double>[
-                                _kViajeSheetMin,
-                                _kViajeSheetPickupCompact,
-                                0.52,
-                                0.75,
-                              ]
-                            : <double>[
-                                _kViajeSheetMin,
-                                0.40,
-                                _kViajeSheetInitial,
-                                0.62,
-                                0.88,
-                              ];
+                            : (faseAbordoPin
+                                ? _kViajeSheetAbordoPin
+                                : (faseEnRuta
+                                    ? _kViajeSheetInitial
+                                    : _kViajeSheetInitial)));
+                    final double minSize = _esViajeMultiparada(v)
+                        ? _kViajeSheetMinMultiparada
+                        : _kViajeSheetMinNormal;
+                    final double sheetMinChild =
+                        faseAbordoPin && mostrarCodigoCliente
+                            ? (minSize > _kViajeSheetMinAbordoPin
+                                ? minSize
+                                : _kViajeSheetMinAbordoPin)
+                            : minSize;
+
+                    if (faseAbordoPin &&
+                        mostrarCodigoCliente &&
+                        !codigoVerificado) {
+                      prepararSheetPinAbordoVisible(
+                        viajeId: v.id,
+                        pin: codigoVerificacion,
+                      );
+                    }
+
+final List<double> sheetSnapSizes = esperandoConductor
+  ? _snapSizesViajeCliente(
+      minSize: sheetMinChild,
+      hitos: <double>[
+        0.34,
+        0.42,
+        0.48,
+        _kViajeSheetEsperaConductor,
+        0.64,
+        0.74,
+        0.84,
+      ],
+    )
+  : fasePickupConductor
+      ? _snapSizesViajeCliente(
+          minSize: minSize,
+          hitos: <double>[
+            0.32,
+            0.40,
+            _kViajeSheetPickupCompact,
+            0.55,
+            0.64,
+            0.74,
+            0.84,
+          ],
+        )
+      : faseAbordoPin
+          ? _snapSizesViajeCliente(
+              minSize: sheetMinChild,
+              hitos: <double>[
+                sheetMinChild,
+                0.48,
+                0.58,
+                _kViajeSheetAbordoPin,
+                0.84,
+                0.90,
+              ],
+            )
+          : _snapSizesViajeCliente(
+              minSize: minSize,
+              hitos: <double>[
+                0.30,
+                0.36,
+                0.44,
+                _kViajeSheetInitial,
+                0.58,
+                0.66,
+                0.74,
+                0.84,
+              ],
+            );
+
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      _maybeAnimarCamaraAlTaxista(v, estadoEfectivo);
+                      _schedulePickupEtaRefresh(v, estadoEfectivo);
+                    });
+
+                    final String? faseClaveSheet = _claveFaseSheetCliente(
+                      viajeId: v.id,
+                      faseAbordoPin: faseAbordoPin,
+                      codigoVerificado: codigoVerificado,
+                      faseEnRuta: faseEnRuta,
+                      fasePickup: fasePickupConductor,
+                      esperandoConductor: esperandoConductor,
+                    );
+                    final double? targetSheetFase = _targetSheetPorFaseCliente(
+                      v: v,
+                      estadoBase: estadoEfectivo,
+                      faseAbordoPin: faseAbordoPin,
+                      codigoVerificado: codigoVerificado,
+                      faseEnRuta: faseEnRuta,
+                    );
+                    final bool sheetAtascadoAhora = targetSheetFase != null &&
+                        _sheetClienteAtascado(targetSheetFase);
+                    final String expandSig =
+                        '${faseClaveSheet ?? 'na'}|$codigoVerificado|$sheetAtascadoAhora|${_sheetExpandPendienteTarget != null}';
+                    if (faseClaveSheet != null &&
+                        (_sheetUltimoExpandSigProgramado != expandSig ||
+                            _sheetExpandPendienteTarget != null)) {
+                      _sheetUltimoExpandSigProgramado = expandSig;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted) return;
+                        _procesarSheetExpandPendiente();
+                        _maybeAutoExpandirSheetPorFaseCliente(
+                          v: v,
+                          estadoBase: estadoEfectivo,
+                          faseAbordoPin: faseAbordoPin,
+                          codigoVerificado: codigoVerificado,
+                          faseEnRuta: faseEnRuta,
+                          fasePickupConductor: fasePickupConductor,
+                          esperandoConductor: esperandoConductor,
+                        );
+                      });
+                    }
+
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted || _yendoAlInicio) return;
+                      if (ActiveTripService.debeForzarInicioClienteShell) {
+                        return;
+                      }
+                      if (ActiveTripService.flujoPostViajeClienteBloquea(
+                            v.id,
+                          ) ||
+                          _viajeClienteCompletadoParaPostViaje(data)) {
+                        return;
+                      }
+                      if (_clienteAbordoEnViajeDoc(data, v) &&
+                          !codigoVerificado) {
+                        ActiveTripService.cancelarForzarInicioClienteShellForzado();
+                        ActiveTripService.mantenerOverlayViajeEnShell(
+                          NavigationService.kOverlayClienteViajeActivo,
+                        );
+                      }
+                    });
 
                     // ===== DETECCIÓN DE CERCANÍA (solo fase pickup; en `en_curso` el cliente en
                     // Firestore puede quedar congelado si la app pasajero no está en primer plano
                     // → la distancia taxista-cliente salta y el banner parpadea). =====
-                    if ((estadoBase == EstadosViaje.aceptado ||
-                            estadoBase == EstadosViaje.enCaminoPickup) &&
+                    if ((estadoEfectivo == EstadosViaje.aceptado ||
+                            estadoEfectivo == EstadosViaje.enCaminoPickup) &&
+                        !codigoVerificado &&
                         _isValidCoord(v.latTaxista, v.lonTaxista) &&
                         _isValidCoord(v.latCliente, v.lonCliente)) {
                       final double distanciaTaxista =
@@ -5474,13 +7247,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             _mensajeCercaniaTimer =
                                 Timer(const Duration(seconds: 10), () {
                               if (mounted) {
-                                setState(() => _mostrarMensajeCercania = false);
+                                setState(
+                                    () => _mostrarMensajeCercania = false);
                               }
                             });
                           } else if (!cerca && _mostrarMensajeCercania) {
                             setState(() => _mostrarMensajeCercania = false);
                             _mensajeCercaniaTimer?.cancel();
                           }
+                          _intentarRecuperarSheetTrasEvento();
                         });
                       }
                     }
@@ -5492,541 +7267,704 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                        RepaintBoundary(
-                          child: (!_mapaPermitido || _mapaDesactivadoPorError)
-                              ? ColoredBox(
-                                  color: const Color(0xFF0A0A0A),
-                                  child: Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(24),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            _mapaDesactivadoPorError
-                                                ? 'Mapa no disponible ahora.\nAbajo tienes llamar, WhatsApp y chat con tu conductor.'
-                                                : 'Cargando mapa…',
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              color: Colors.white54,
-                                              height: 1.35,
+                              RepaintBoundary(
+                                child: (!_mapaPermitido ||
+                                        _mapaDesactivadoPorError)
+                                    ? ColoredBox(
+                                        color: const Color(0xFF0A0A0A),
+                                        child: Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(24),
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  _mapaDesactivadoPorError
+                                                      ? 'Mapa no disponible ahora.\nAbajo tienes llamar, WhatsApp y chat con tu conductor.'
+                                                      : 'Cargando mapa…',
+                                                  textAlign: TextAlign.center,
+                                                  style: const TextStyle(
+                                                    color: Colors.white54,
+                                                    height: 1.35,
+                                                  ),
+                                                ),
+                                                if (_mapaDesactivadoPorError) ...[
+                                                  const SizedBox(height: 16),
+                                                  FilledButton.icon(
+                                                    onPressed:
+                                                        _reintentarMapaViajeManual,
+                                                    icon:
+                                                        const Icon(Icons.map),
+                                                    label: const Text(
+                                                        'Reintentar mapa'),
+                                                  ),
+                                                ],
+                                              ],
                                             ),
                                           ),
-                                          if (_mapaDesactivadoPorError) ...[
-                                            const SizedBox(height: 16),
-                                            FilledButton.icon(
-                                              onPressed: () {
-                                                setState(() {
-                                                  _mapaDesactivadoPorError =
-                                                      false;
-                                                  _mapaPermitido = true;
-                                                });
-                                              },
-                                              icon: const Icon(Icons.map),
-                                              label: const Text('Reintentar mapa'),
+                                        ),
+                                      )
+                                    : (kIsWeb
+                                        ? MapaTiempoReal(
+                                            key: ValueKey<String>(
+                                                'osm-viaje-${v.id}'),
+                                            origen: _isValidCoord(
+                                                    v.latCliente,
+                                                    v.lonCliente)
+                                                ? _latLng(v.latCliente,
+                                                    v.lonCliente)
+                                                : null,
+                                            destino: _isValidCoord(
+                                                    v.latDestino,
+                                                    v.lonDestino)
+                                                ? _latLng(v.latDestino,
+                                                    v.lonDestino)
+                                                : null,
+                                            ubicacionTaxista: posTaxistaMapa,
+                                            // Pins vienen en overlay (origen/destino/paradas/pool).
+                                            mostrarOrigen: false,
+                                            mostrarDestino: false,
+                                            mostrarTaxista: false,
+                                            esCliente: true,
+                                            esTaxista: false,
+                                            overlayMarkers: markers,
+                                            overlayPolylines:
+                                                Set<Polyline>.of(
+                                                    _polylines.values),
+                                            onUserInteractWithMap: () =>
+                                                _colapsarSheetPorMapaEnFase(
+                                                  fasePickupConductor:
+                                                      fasePickupConductor,
+                                                  faseAbordoPin: faseAbordoPin,
+                                                  faseEnRuta: faseEnRuta,
+                                                ),
+                                            onUserMapGestureEnd: v.esMotor ||
+                                                    !_sheetAutoExpandPorMapaPermitido(
+                                                      esMotor: v.esMotor,
+                                                      faseAbordoPin:
+                                                          faseAbordoPin,
+                                                      fasePickupConductor:
+                                                          fasePickupConductor,
+                                                    )
+                                                ? null
+                                                : () =>
+                                                    _expandirSheetTrasMapaInteract(),
+                                          )
+                                        : GoogleMap(
+                                            key: ValueKey<String>(
+                                                'gmap-${v.id}'),
+                                            padding: EdgeInsets.only(
+                                              top: MediaQuery.of(context)
+                                                      .padding
+                                                      .top +
+                                                  56,
+                                              bottom: MediaQuery.of(context)
+                                                      .size
+                                                      .height *
+                                                  0.40,
+                                              left: 32,
+                                              right: 32,
+                                            ),
+                                            initialCameraPosition:
+                                                CameraPosition(
+                                                    target: initialTarget,
+                                                    zoom: 14),
+                                            onMapCreated:
+                                                (GoogleMapController c) {
+                                              _map = c;
+                                              WidgetsBinding.instance
+                                                  .addPostFrameCallback(
+                                                      (_) async {
+                                                final GoogleMapController?
+                                                    mapRef = _map;
+                                                if (!mounted ||
+                                                    mapRef == null) return;
+                                                try {
+                                                  _programmaticCameraDepth++;
+                                                  await mapRef.animateCamera(
+                                                      CameraUpdate
+                                                          .newLatLngZoom(
+                                                              initialTarget,
+                                                              14));
+                                                } catch (_) {
+                                                  if (_programmaticCameraDepth >
+                                                      0) {
+                                                    _programmaticCameraDepth--;
+                                                  }
+                                                }
+                                                final String bk =
+                                                    '${v.id}|$estadoBase|${v.latCliente},${v.lonCliente}|'
+                                                    '${v.latDestino},${v.lonDestino}|'
+                                                    '${_firmaWaypointsViaje(v)}';
+                                                if (_lastBoundsKey != bk) {
+                                                  _lastBoundsKey = bk;
+                                                  await _fitBoundsFor(v);
+                                                }
+                                              });
+                                            },
+                                            onCameraMoveStarted: () {
+                                              _mapGestureEndDebounce
+                                                  ?.cancel();
+                                              if (_programmaticCameraDepth ==
+                                                  0) {
+                                                _colapsarSheetPorMapaEnFase(
+                                                  fasePickupConductor:
+                                                      fasePickupConductor,
+                                                  faseAbordoPin: faseAbordoPin,
+                                                  faseEnRuta: faseEnRuta,
+                                                );
+                                              }
+                                              if (_seguirTaxistaCamara) {
+                                                setState(() =>
+                                                    _seguirTaxistaCamara =
+                                                        false);
+                                              }
+                                            },
+                                            onCameraIdle: () {
+                                              if (_programmaticCameraDepth >
+                                                  0) {
+                                                _programmaticCameraDepth--;
+                                                return;
+                                              }
+                                              _mapGestureEndDebounce
+                                                  ?.cancel();
+                                              if (_sheetAutoExpandPorMapaPermitido(
+                                                esMotor: v.esMotor,
+                                                faseAbordoPin: faseAbordoPin,
+                                                fasePickupConductor:
+                                                    fasePickupConductor,
+                                              )) {
+                                                _expandirSheetTrasMapaInteract();
+                                              }
+                                            },
+                                            onTap: (_) {
+                                              if (_programmaticCameraDepth >
+                                                  0) return;
+                                              _colapsarSheetPorMapaEnFase(
+                                                fasePickupConductor:
+                                                    fasePickupConductor,
+                                                faseAbordoPin: faseAbordoPin,
+                                                faseEnRuta: faseEnRuta,
+                                              );
+                                              _mapGestureEndDebounce
+                                                  ?.cancel();
+                                              if (_sheetAutoExpandPorMapaPermitido(
+                                                esMotor: v.esMotor,
+                                                faseAbordoPin: faseAbordoPin,
+                                                fasePickupConductor:
+                                                    fasePickupConductor,
+                                              )) {
+                                                _mapGestureEndDebounce =
+                                                    Timer(
+                                                  const Duration(
+                                                      milliseconds: 420),
+                                                  () {
+                                                    if (mounted) {
+                                                      _expandirSheetTrasMapaInteract();
+                                                    }
+                                                  },
+                                                );
+                                              }
+                                            },
+                                            myLocationEnabled: _myLoc,
+                                            myLocationButtonEnabled: false,
+                                            zoomControlsEnabled: true,
+                                            markers: markers,
+                                            circles: circles,
+                                            polylines: Set<Polyline>.of(
+                                                _polylines.values),
+                                            compassEnabled: true,
+                                            mapToolbarEnabled: false,
+                                            trafficEnabled: true,
+                                          )),
+                              ),
+                              // ===== BOTÓN FLOTANTE "VER TAXISTA" (siempre visible) =====
+                              if (pulsoTaxistaEnMapa)
+                                Positioned(
+                                  top: 0,
+                                  left: 10,
+                                  right: 10,
+                                  child: SafeArea(
+                                    bottom: false,
+                                    child: Material(
+                                      color: Colors.black
+                                          .withValues(alpha: 0.88),
+                                      elevation: 6,
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: InkWell(
+                                        borderRadius:
+                                            BorderRadius.circular(16),
+                                        onTap: () => setState(
+                                          () => _pickupEtaMinimizado =
+                                              !_pickupEtaMinimizado,
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 12,
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.local_taxi_rounded,
+                                                    color: Color(0xFF49F18B),
+                                                    size: 22,
+                                                  ),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: AnimatedSwitcher(
+                                                      duration:
+                                                          const Duration(
+                                                              milliseconds:
+                                                                  280),
+                                                      switchInCurve:
+                                                          Curves.easeOutCubic,
+                                                      switchOutCurve:
+                                                          Curves.easeInCubic,
+                                                      transitionBuilder:
+                                                          (child, animation) {
+                                                        return FadeTransition(
+                                                          opacity: animation,
+                                                          child:
+                                                              SlideTransition(
+                                                            position: Tween<
+                                                                Offset>(
+                                                              begin:
+                                                                  const Offset(
+                                                                      0,
+                                                                      0.08),
+                                                              end:
+                                                                  Offset.zero,
+                                                            ).animate(
+                                                                animation),
+                                                            child: child,
+                                                          ),
+                                                        );
+                                                      },
+                                                      child: Text(
+                                                        estadoBase ==
+                                                                EstadosViaje
+                                                                    .enCurso
+                                                            ? 'Viaje en marcha · conductor en tiempo real'
+                                                            : (_pickupEtaTitulo ??
+                                                                'Tu conductor va hacia tu punto de recogida'),
+                                                        key: ValueKey<String>(
+                                                          estadoBase ==
+                                                                  EstadosViaje
+                                                                      .enCurso
+                                                              ? 'en-curso-title'
+                                                              : (_pickupEtaTitulo ??
+                                                                  'pickup-title-default'),
+                                                        ),
+                                                        style:
+                                                            const TextStyle(
+                                                          color: Colors.white,
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                          fontSize: 15,
+                                                          height: 1.25,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Icon(
+                                                    _pickupEtaMinimizado
+                                                        ? Icons
+                                                            .expand_more_rounded
+                                                        : Icons
+                                                            .expand_less_rounded,
+                                                    color: Colors.white70,
+                                                  ),
+                                                ],
+                                              ),
+                                              if (fasePickupConductor)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 10),
+                                                  child:
+                                                      ClienteViajeEsperaCronometro(
+                                                    inicio:
+                                                        inicioCaminoConductor,
+                                                    modo:
+                                                        ClienteViajeEsperaCronometroModo
+                                                            .conductorEnCamino,
+                                                    compacto: true,
+                                                    mostrarEnVivo: false,
+                                                  ),
+                                                ),
+                                              if (!_pickupEtaMinimizado &&
+                                                  (estadoBase ==
+                                                          EstadosViaje
+                                                              .enCurso ||
+                                                      _pickupEtaDetalle !=
+                                                          null ||
+                                                      _pickupEtaTitulo ==
+                                                          null))
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 8),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      AnimatedSwitcher(
+                                                        duration:
+                                                            const Duration(
+                                                                milliseconds:
+                                                                    260),
+                                                        switchInCurve: Curves
+                                                            .easeOutCubic,
+                                                        switchOutCurve: Curves
+                                                            .easeInCubic,
+                                                        transitionBuilder:
+                                                            (child,
+                                                                animation) {
+                                                          return FadeTransition(
+                                                            opacity:
+                                                                animation,
+                                                            child: child,
+                                                          );
+                                                        },
+                                                        child: Text(
+                                                          estadoBase ==
+                                                                  EstadosViaje
+                                                                      .enCurso
+                                                              ? 'Seguí la ubicación del conductor en el mapa; '
+                                                                  'tocá «Seguir conductor» si soltaste el seguimiento.'
+                                                              : (_pickupEtaDetalle ??
+                                                                  'Deslizá el panel inferior para ver todos los detalles del viaje.'),
+                                                          key: ValueKey<
+                                                              String>(
+                                                            estadoBase ==
+                                                                    EstadosViaje
+                                                                        .enCurso
+                                                                ? 'en-curso-detail'
+                                                                : (_pickupEtaDetalle ??
+                                                                    'pickup-detail-default'),
+                                                          ),
+                                                          style:
+                                                              const TextStyle(
+                                                            color: Colors
+                                                                .white70,
+                                                            fontSize: 13,
+                                                            height: 1.35,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      if (_isValidCoord(
+                                                          v.latTaxista,
+                                                          v.lonTaxista))
+                                                        Align(
+                                                          alignment: Alignment
+                                                              .centerLeft,
+                                                          child:
+                                                              TextButton.icon(
+                                                            onPressed: () =>
+                                                                unawaited(
+                                                              _openGoogleMapsVerUbicacionConductor(
+                                                                v.latTaxista,
+                                                                v.lonTaxista,
+                                                              ),
+                                                            ),
+                                                            style: TextButton
+                                                                .styleFrom(
+                                                              foregroundColor:
+                                                                  const Color(
+                                                                      0xFF49F18B),
+                                                              padding: const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal:
+                                                                      0,
+                                                                  vertical:
+                                                                      6),
+                                                              tapTargetSize:
+                                                                  MaterialTapTargetSize
+                                                                      .shrinkWrap,
+                                                            ),
+                                                            icon: const Icon(
+                                                                Icons
+                                                                    .map_rounded,
+                                                                size: 18),
+                                                            label: const Text(
+                                                              'Navegar con mapa',
+                                                              style:
+                                                                  TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w700,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
+                                  !faseAbordoPin)
+                                Positioned(
+                                  top: pulsoTaxistaEnMapa ? 108 : 16,
+                                  right: 16,
+                                  child: FloatingActionButton.extended(
+                                    onPressed: () => _centrarEnTaxista(v),
+                                    icon: const Icon(Icons.my_location,
+                                        color: Colors.white),
+                                    label: const Text('Seguir conductor',
+                                        style:
+                                            TextStyle(color: Colors.white)),
+                                    backgroundColor: Colors.black87,
+                                    heroTag: null,
+                                  ),
+                                ),
+                              KeyedSubtree(
+                                key: ValueKey<String>(
+                                  'pin-flotante-${v.id}-$mostrarCodigoCliente-$codigoVerificacion',
+                                ),
+                                child: _buildPinFlotanteEnMapa(
+                                  viajeId: v.id,
+                                  codigoVerificacion: codigoVerificacion,
+                                  mostrar: mostrarCodigoCliente &&
+                                      !panelConductorAsignado,
+                                  cargando: _pinEnsureEnCurso,
+                                  esMotor: v.esMotor,
+                                ),
+                              ),
+                              if (mostrarBotonTocaPinEnMapa && !faseAbordoPin)
+                                Positioned(
+                                  left: 12,
+                                  right: 12,
+                                  bottom: MediaQuery.of(context).size.height *
+                                      0.24,
+                                  child: KeyedSubtree(
+                                    key: ValueKey<String>(
+                                      'toca-pin-mapa-${v.id}-$fasePickupConductor-$faseAbordoPin',
+                                    ),
+                                    child: _buildBotonTocaActualizarViajeFlotante(
+                                      viajeId: v.id,
+                                      enEsperaAbordo: fasePickupConductor,
+                                    ),
+                                  ),
+                                ),
+                              if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
+                                  _seguirTaxistaCamara)
+                                Positioned(
+                                  top: pulsoTaxistaEnMapa ? 108 : 16,
+                                  left: 16,
+                                  child: AnimatedBuilder(
+                                    animation: _radarCtrl,
+                                    builder: (_, __) {
+                                      final double t = _radarCtrl.value;
+                                      final double pulso = 0.55 +
+                                          (0.45 * math.sin(t * 2 * math.pi))
+                                              .abs();
+                                      return AnimatedContainer(
+                                        duration:
+                                            const Duration(milliseconds: 220),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF0D2B1A)
+                                              .withValues(
+                                            alpha: 0.78 + (0.18 * pulso),
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                          border: Border.all(
+                                            color:
+                                                Colors.greenAccent.withValues(
+                                              alpha: 0.55 + (0.4 * pulso),
+                                            ),
+                                            width: 1.1,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.greenAccent
+                                                  .withValues(
+                                                alpha: 0.12 + (0.22 * pulso),
+                                              ),
+                                              blurRadius: 8 + (8 * pulso),
+                                              offset: const Offset(0, 2),
                                             ),
                                           ],
+                                        ),
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons
+                                                  .fiber_manual_record_rounded,
+                                              size: 12,
+                                              color: Colors.greenAccent,
+                                            ),
+                                            SizedBox(width: 6),
+                                            Text(
+                                              'EN VIVO',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w800,
+                                                letterSpacing: 0.3,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
+                                  !faseAbordoPin)
+                                Positioned(
+                                  top: pulsoTaxistaEnMapa ? 164 : 72,
+                                  right: 16,
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final bool narrow =
+                                          MediaQuery.sizeOf(context).width <
+                                              360;
+                                      if (narrow) {
+                                        return FloatingActionButton(
+                                          onPressed: () =>
+                                              _centrarClienteYTaxista(v),
+                                          tooltip: 'Centrar ambos',
+                                          backgroundColor: Colors.black54,
+                                          heroTag: null,
+                                          child: const Icon(
+                                            Icons.center_focus_strong,
+                                            color: Colors.white,
+                                          ),
+                                        );
+                                      }
+                                      return FloatingActionButton.extended(
+                                        onPressed: () =>
+                                            _centrarClienteYTaxista(v),
+                                        icon: const Icon(
+                                            Icons.center_focus_strong,
+                                            color: Colors.white),
+                                        label: const Text('Centrar ambos',
+                                            style: TextStyle(
+                                                color: Colors.white)),
+                                        backgroundColor: Colors.black54,
+                                        heroTag: null,
+                                      );
+                                    },
+                                  ),
+                                ),
+                              // ===== MENSAJE DE CERCANÍA =====
+                              if (_mostrarMensajeCercania)
+                                Positioned(
+                                  top: pulsoTaxistaEnMapa ? 188 : 80,
+                                  left: 16,
+                                  right: 16,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.greenAccent,
+                                      borderRadius: BorderRadius.circular(30),
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          color: Color(0x42000000),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Text(
+                                      '🚕 Tu conductor está llegando',
+                                      style: TextStyle(
+                                        color: Colors.black,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                              if (esperandoTaxista) _radarSearchingOverlay(),
+                              if (esperandoTaxista)
+                                Positioned(
+                                  top: 0,
+                                  left: 10,
+                                  right: 10,
+                                  child: SafeArea(
+                                    bottom: false,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: ClienteViajeEsperaCronometro(
+                                        inicio: inicioEsperaBusqueda,
+                                        modo: ClienteViajeEsperaCronometroModo
+                                            .busquedaConductor,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (pulsoTaxistaEnMapa)
+                                Positioned(
+                                  left: 12,
+                                  right: 12,
+                                  bottom: 10,
+                                  child: Material(
+                                    elevation: 8,
+                                    borderRadius: BorderRadius.circular(14),
+                                    color:
+                                        Colors.black.withValues(alpha: 0.88),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 12),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.local_taxi,
+                                              color: Colors.greenAccent,
+                                              size: 22),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              _lineaEtaPickupCliente(
+                                                  v, estadoBase),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.w600,
+                                                fontSize: 14,
+                                                height: 1.25,
+                                              ),
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
                                   ),
-                                )
-                              : (kIsWeb
-                              ? MapaTiempoReal(
-                                  key: ValueKey<String>('osm-viaje-${v.id}'),
-                                  origen: _isValidCoord(
-                                          v.latCliente, v.lonCliente)
-                                      ? _latLng(v.latCliente, v.lonCliente)
-                                      : null,
-                                  destino: _isValidCoord(
-                                          v.latDestino, v.lonDestino)
-                                      ? _latLng(v.latDestino, v.lonDestino)
-                                      : null,
-                                  ubicacionTaxista: posTaxistaMapa,
-                                  // Pins vienen en overlay (origen/destino/paradas/pool).
-                                  mostrarOrigen: false,
-                                  mostrarDestino: false,
-                                  mostrarTaxista: false,
-                                  esCliente: true,
-                                  esTaxista: false,
-                                  overlayMarkers: markers,
-                                  overlayPolylines:
-                                      Set<Polyline>.of(_polylines.values),
-                                  onUserInteractWithMap: _colapsarSheetPorTapMapa,
-                                  onUserMapGestureEnd: v.esMotor
-                                      ? null
-                                      : _expandirSheetTrasMapaInteract,
-                                )
-                              : GoogleMap(
-                            key: ValueKey<String>('gmap-${v.id}'),
-                            padding: EdgeInsets.only(
-                              top: MediaQuery.of(context).padding.top + 56,
-                              bottom: MediaQuery.of(context).size.height * 0.40,
-                              left: 32,
-                              right: 32,
-                            ),
-                            initialCameraPosition:
-                                CameraPosition(target: initialTarget, zoom: 14),
-                            onMapCreated: (GoogleMapController c) {
-                              _map = c;
-                              WidgetsBinding.instance
-                                  .addPostFrameCallback((_) async {
-                                final GoogleMapController? mapRef = _map;
-                                if (!mounted || mapRef == null) return;
-                                try {
-                                  _programmaticCameraDepth++;
-                                  await mapRef.animateCamera(
-                                      CameraUpdate.newLatLngZoom(
-                                          initialTarget, 14));
-                                } catch (_) {
-                                  if (_programmaticCameraDepth > 0) {
-                                    _programmaticCameraDepth--;
-                                  }
-                                }
-                                final String bk =
-                                    '${v.id}|$estadoBase|${v.latCliente},${v.lonCliente}|'
-                                    '${v.latDestino},${v.lonDestino}|'
-                                    '${_firmaWaypointsViaje(v)}';
-                                if (_lastBoundsKey != bk) {
-                                  _lastBoundsKey = bk;
-                                  await _fitBoundsFor(v);
-                                }
-                              });
-                            },
-                            onCameraMoveStarted: () {
-                              _mapGestureEndDebounce?.cancel();
-                              if (_programmaticCameraDepth == 0) {
-                                _colapsarSheetPorTapMapa();
-                              }
-                              if (_seguirTaxistaCamara) {
-                                setState(() => _seguirTaxistaCamara = false);
-                              }
-                            },
-                            onCameraIdle: () {
-                              if (_programmaticCameraDepth > 0) {
-                                _programmaticCameraDepth--;
-                                return;
-                              }
-                              _mapGestureEndDebounce?.cancel();
-                              // Motor: no reexpandir la tarjeta al parar la cámara; el usuario
-                              // baja el panel a mano para ver el mapa y no debe "subir sola".
-                              if (!v.esMotor) {
-                                _expandirSheetTrasMapaInteract();
-                              }
-                            },
-                            onTap: (_) {
-                              if (_programmaticCameraDepth > 0) return;
-                              _colapsarSheetPorTapMapa();
-                              _mapGestureEndDebounce?.cancel();
-                              if (!v.esMotor) {
-                                _mapGestureEndDebounce = Timer(
-                                  const Duration(milliseconds: 420),
-                                  () {
-                                    if (mounted) {
-                                      _expandirSheetTrasMapaInteract();
-                                    }
-                                  },
-                                );
-                              }
-                            },
-                            myLocationEnabled: _myLoc,
-                            myLocationButtonEnabled: false,
-                            zoomControlsEnabled: true,
-                            markers: markers,
-                            circles: circles,
-                            polylines: Set<Polyline>.of(_polylines.values),
-                            compassEnabled: true,
-                            mapToolbarEnabled: false,
-                            trafficEnabled: true,
-                          )),
-                        ),
-                        // ===== BOTÓN FLOTANTE "VER TAXISTA" (siempre visible) =====
-                        if (pulsoTaxistaEnMapa)
-                          Positioned(
-                            top: 0,
-                            left: 10,
-                            right: 10,
-                            child: SafeArea(
-                              bottom: false,
-                              child: Material(
-                                color: Colors.black.withValues(alpha: 0.88),
-                                elevation: 6,
-                                borderRadius: BorderRadius.circular(16),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(16),
-                                  onTap: () => setState(
-                                    () => _pickupEtaMinimizado =
-                                        !_pickupEtaMinimizado,
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 12,
-                                    ),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Icon(
-                                              Icons.local_taxi_rounded,
-                                              color: Color(0xFF49F18B),
-                                              size: 22,
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Expanded(
-                                              child: AnimatedSwitcher(
-                                                duration: const Duration(
-                                                    milliseconds: 280),
-                                                switchInCurve:
-                                                    Curves.easeOutCubic,
-                                                switchOutCurve:
-                                                    Curves.easeInCubic,
-                                                transitionBuilder:
-                                                    (child, animation) {
-                                                  return FadeTransition(
-                                                    opacity: animation,
-                                                    child: SlideTransition(
-                                                      position: Tween<Offset>(
-                                                        begin: const Offset(
-                                                            0, 0.08),
-                                                        end: Offset.zero,
-                                                      ).animate(animation),
-                                                      child: child,
-                                                    ),
-                                                  );
-                                                },
-                                                child: Text(
-                                                  estadoBase ==
-                                                          EstadosViaje.enCurso
-                                                      ? 'Viaje en marcha · conductor en tiempo real'
-                                                      : (_pickupEtaTitulo ??
-                                                          'Tu conductor va hacia tu punto de recogida'),
-                                                  key: ValueKey<String>(
-                                                    estadoBase ==
-                                                            EstadosViaje.enCurso
-                                                        ? 'en-curso-title'
-                                                        : (_pickupEtaTitulo ??
-                                                            'pickup-title-default'),
-                                                  ),
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 15,
-                                                    height: 1.25,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            Icon(
-                                              _pickupEtaMinimizado
-                                                  ? Icons.expand_more_rounded
-                                                  : Icons.expand_less_rounded,
-                                              color: Colors.white70,
-                                            ),
-                                          ],
-                                        ),
-                                        if (fasePickupConductor)
-                                          Padding(
-                                            padding:
-                                                const EdgeInsets.only(top: 10),
-                                            child: ClienteViajeEsperaCronometro(
-                                              inicio: inicioCaminoConductor,
-                                              modo:
-                                                  ClienteViajeEsperaCronometroModo
-                                                      .conductorEnCamino,
-                                              compacto: true,
-                                              mostrarEnVivo: false,
-                                            ),
-                                          ),
-                                        if (!_pickupEtaMinimizado &&
-                                            (estadoBase ==
-                                                    EstadosViaje.enCurso ||
-                                                _pickupEtaDetalle != null ||
-                                                _pickupEtaTitulo == null))
-                                          Padding(
-                                            padding:
-                                                const EdgeInsets.only(top: 8),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                AnimatedSwitcher(
-                                                  duration: const Duration(
-                                                      milliseconds: 260),
-                                                  switchInCurve:
-                                                      Curves.easeOutCubic,
-                                                  switchOutCurve:
-                                                      Curves.easeInCubic,
-                                                  transitionBuilder:
-                                                      (child, animation) {
-                                                    return FadeTransition(
-                                                      opacity: animation,
-                                                      child: child,
-                                                    );
-                                                  },
-                                                  child: Text(
-                                                    estadoBase ==
-                                                            EstadosViaje.enCurso
-                                                        ? 'Seguí la ubicación del conductor en el mapa; '
-                                                            'tocá «Seguir conductor» si soltaste el seguimiento.'
-                                                        : (_pickupEtaDetalle ??
-                                                                'Deslizá el panel inferior para ver todos los detalles del viaje.'),
-                                                    key: ValueKey<String>(
-                                                      estadoBase ==
-                                                              EstadosViaje
-                                                                  .enCurso
-                                                          ? 'en-curso-detail'
-                                                          : (_pickupEtaDetalle ??
-                                                              'pickup-detail-default'),
-                                                    ),
-                                                    style: const TextStyle(
-                                                      color: Colors.white70,
-                                                      fontSize: 13,
-                                                      height: 1.35,
-                                                    ),
-                                                  ),
-                                                ),
-                                                if (_isValidCoord(
-                                                    v.latTaxista, v.lonTaxista))
-                                                  Align(
-                                                    alignment:
-                                                        Alignment.centerLeft,
-                                                    child: TextButton.icon(
-                                                      onPressed: () => unawaited(
-                                                        _openGoogleMapsVerUbicacionConductor(
-                                                          v.latTaxista,
-                                                          v.lonTaxista,
-                                                        ),
-                                                      ),
-                                                      style:
-                                                          TextButton.styleFrom(
-                                                        foregroundColor:
-                                                            const Color(
-                                                                0xFF49F18B),
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .symmetric(
-                                                                horizontal: 0,
-                                                                vertical: 6),
-                                                        tapTargetSize:
-                                                            MaterialTapTargetSize
-                                                                .shrinkWrap,
-                                                      ),
-                                                      icon: const Icon(
-                                                          Icons.map_rounded,
-                                                          size: 18),
-                                                      label: const Text(
-                                                        'Navegar con mapa',
-                                                        style: TextStyle(
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
                                 ),
-                              ),
-                            ),
-                          ),
-                        if (_isValidCoord(v.latTaxista, v.lonTaxista))
-                          Positioned(
-                            top: pulsoTaxistaEnMapa ? 108 : 16,
-                            right: 16,
-                            child: FloatingActionButton.extended(
-                              onPressed: () => _centrarEnTaxista(v),
-                              icon: const Icon(Icons.my_location,
-                                  color: Colors.white),
-                              label: const Text('Seguir conductor',
-                                  style: TextStyle(color: Colors.white)),
-                              backgroundColor: Colors.black87,
-                              heroTag: null,
-                            ),
-                          ),
-                        if (_isValidCoord(v.latTaxista, v.lonTaxista) &&
-                            _seguirTaxistaCamara)
-                          Positioned(
-                            top: pulsoTaxistaEnMapa ? 108 : 16,
-                            left: 16,
-                            child: AnimatedBuilder(
-                              animation: _radarCtrl,
-                              builder: (_, __) {
-                                final double t = _radarCtrl.value;
-                                final double pulso = 0.55 + (0.45 * math.sin(t * 2 * math.pi)).abs();
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 220),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF0D2B1A).withValues(
-                                      alpha: 0.78 + (0.18 * pulso),
-                                    ),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(
-                                      color: Colors.greenAccent.withValues(
-                                        alpha: 0.55 + (0.4 * pulso),
-                                      ),
-                                      width: 1.1,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.greenAccent.withValues(
-                                          alpha: 0.12 + (0.22 * pulso),
-                                        ),
-                                        blurRadius: 8 + (8 * pulso),
-                                        offset: const Offset(0, 2),
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.fiber_manual_record_rounded,
-                                        size: 12,
-                                        color: Colors.greenAccent,
-                                      ),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'EN VIVO',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 0.3,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        if (_isValidCoord(v.latTaxista, v.lonTaxista))
-                          Positioned(
-                            top: pulsoTaxistaEnMapa ? 164 : 72,
-                            right: 16,
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                final bool narrow =
-                                    MediaQuery.sizeOf(context).width < 360;
-                                if (narrow) {
-                                  return FloatingActionButton(
-                                    onPressed: () =>
-                                        _centrarClienteYTaxista(v),
-                                    tooltip: 'Centrar ambos',
-                                    backgroundColor: Colors.black54,
-                                    heroTag: null,
-                                    child: const Icon(
-                                      Icons.center_focus_strong,
-                                      color: Colors.white,
-                                    ),
-                                  );
-                                }
-                                return FloatingActionButton.extended(
-                                  onPressed: () =>
-                                      _centrarClienteYTaxista(v),
-                                  icon: const Icon(Icons.center_focus_strong,
-                                      color: Colors.white),
-                                  label: const Text('Centrar ambos',
-                                      style: TextStyle(color: Colors.white)),
-                                  backgroundColor: Colors.black54,
-                                  heroTag: null,
-                                );
-                              },
-                            ),
-                          ),
-                        // ===== MENSAJE DE CERCANÍA =====
-                        if (_mostrarMensajeCercania)
-                          Positioned(
-                            top: pulsoTaxistaEnMapa ? 188 : 80,
-                            left: 16,
-                            right: 16,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.greenAccent,
-                                borderRadius: BorderRadius.circular(30),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x42000000),
-                                    blurRadius: 10,
-                                    offset: Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: const Text(
-                                '🚕 Tu conductor está llegando',
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                              if (!esperandoTaxista &&
+                                  v.uidTaxista.isNotEmpty &&
+                                  (FirebaseAuth.instance.currentUser?.uid ??
+                                          '')
+                                      .isNotEmpty)
+                                ViajeChatMapaOverlay(
+                                  viajeId: v.id,
+                                  miUid: FirebaseAuth
+                                      .instance.currentUser!.uid,
+                                  otroUid: _uidTaxistaDelViaje(v, data),
+                                  otroNombre: v.nombreTaxista.isNotEmpty
+                                      ? v.nombreTaxista
+                                      : 'Conductor',
+                                  bottom: pulsoTaxistaEnMapa ? 78 : 12,
                                 ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ),
-                        if (esperandoTaxista) _radarSearchingOverlay(),
-                        if (esperandoTaxista)
-                          Positioned(
-                            top: 0,
-                            left: 10,
-                            right: 10,
-                            child: SafeArea(
-                              bottom: false,
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: ClienteViajeEsperaCronometro(
-                                  inicio: inicioEsperaBusqueda,
-                                  modo: ClienteViajeEsperaCronometroModo
-                                      .busquedaConductor,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (pulsoTaxistaEnMapa)
-                          Positioned(
-                            left: 12,
-                            right: 12,
-                            bottom: 10,
-                            child: Material(
-                              elevation: 8,
-                              borderRadius: BorderRadius.circular(14),
-                              color: Colors.black.withValues(alpha: 0.88),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 12),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.local_taxi,
-                                        color: Colors.greenAccent, size: 22),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        _lineaEtaPickupCliente(v, estadoBase),
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
                             ],
                           ),
                         ),
@@ -6040,22 +7978,28 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                             ),
                           ),
                         DraggableScrollableSheet(
+                          key: ValueKey<String>('viaje-sheet-${v.id}'),
                           controller: _viajeSheetCtrl,
-                          minChildSize: _kViajeSheetMin,
-                          maxChildSize: 1.0,
+                          expand: true,
+                          minChildSize: sheetMinChild,
+                          maxChildSize: 0.94,
                           initialChildSize: sheetInitial,
                           snap: true,
+                          snapAnimationDuration: _kViajeSheetSnapDuration,
                           snapSizes: sheetSnapSizes,
                           builder: (sheetCtx, scrollController) {
+                            _viajeSheetScrollCtrl = scrollController;
                             final double bottomInset =
                                 MediaQuery.viewPaddingOf(sheetCtx).bottom;
-                            return DecoratedBox(
+                            return RepaintBoundary(
+                              child: DecoratedBox(
                               decoration: const BoxDecoration(
                                 color: Colors.black,
                                 borderRadius: BorderRadius.vertical(
                                     top: Radius.circular(16)),
                                 border: Border(
-                                    top: BorderSide(color: Color(0x22FFFFFF))),
+                                    top:
+                                        BorderSide(color: Color(0x22FFFFFF))),
                                 boxShadow: [
                                   BoxShadow(
                                     color: Color(0x66000000),
@@ -6064,38 +8008,135 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                   ),
                                 ],
                               ),
-                              child: ListView(
-                                controller: scrollController,
-                                physics: v.esMotor
-                                    ? const AlwaysScrollableScrollPhysics(
-                                        parent: ClampingScrollPhysics(),
-                                      )
-                                    : const ClampingScrollPhysics(),
-                                padding: EdgeInsets.fromLTRB(
-                                  16,
-                                  8,
-                                  16,
-                                  12 + bottomInset,
-                                ),
-                                children: [
-                                  Center(
-                                    child: Container(
-                                      width: 40,
-                                      height: 5,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white24,
-                                        borderRadius: BorderRadius.circular(3),
+                              child: NotificationListener<ScrollNotification>(
+                                onNotification: (ScrollNotification n) {
+                                  if (n is ScrollStartNotification &&
+                                      n.dragDetails != null) {
+                                    _sheetScrollArrastrando = true;
+                                    _sheetUltimoGestUsuario = DateTime.now();
+                                  } else if (n is ScrollEndNotification) {
+                                    _sheetScrollArrastrando = false;
+                                    _finalizarInteraccionSheetUsuario();
+                                  }
+                                  return false;
+                                },
+                                child: CustomScrollView(
+                                  controller: scrollController,
+                                  // DraggableScrollableSheet enlaza el arrastre al ScrollController;
+                                  // debe ser AlwaysScrollable o el touch muere en device real.
+                                  physics: const AlwaysScrollableScrollPhysics(
+                                    parent: ClampingScrollPhysics(),
+                                  ),
+                                  slivers: <Widget>[
+                                    SliverToBoxAdapter(
+                                      child: Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            16, 8, 16, 0),
+                                        child: _viajeSheetHandleCliente(
+                                          mostrarHintDeslizar:
+                                              fasePickupConductor ||
+                                                  esperandoConductor ||
+                                                  faseEnRuta ||
+                                                  faseAbordoPin,
+                                          minSize: sheetMinChild,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
+                                    if (faseAbordoPin)
+                                      SliverToBoxAdapter(
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            16,
+                                            0,
+                                            16,
+                                            0,
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: <Widget>[
+                                              _buildClienteZonaAccionesSticky(
+                                                v,
+                                                estadoEfectivo,
+                                                cancelarHabilitado,
+                                                compacto: true,
+                                                reforzarComunicacionEnSticky:
+                                                    false,
+                                              ),
+                                              if (mostrarCodigoCliente)
+                                                _buildCodigoVerificacionClienteSection(
+                                                  codigoVerificacion:
+                                                      codigoVerificacion,
+                                                  codigoVerificado:
+                                                      codigoVerificado,
+                                                  estadoBase: estadoBase,
+                                                  mostrarCodigo:
+                                                      mostrarCodigoCliente,
+                                                  esMotor: v.esMotor,
+                                                  viajeIdParaActualizar: v.id,
+                                                  integradoEnPanelConductor:
+                                                      true,
+                                                ),
+                                              _viajeSheetDivider(
+                                                'Desliza abajo para más detalles',
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    SliverPadding(
+                                      padding: EdgeInsets.fromLTRB(
+                                        16,
+                                        0,
+                                        16,
+                                        12 + bottomInset,
+                                      ),
+                                      sliver: SliverList(
+                                        delegate: SliverChildListDelegate(
+                                          <Widget>[
+                                  if (!faseAbordoPin) ...<Widget>[
                                   _buildClienteZonaAccionesSticky(
                                     v,
-                                    estadoBase,
+                                    estadoEfectivo,
                                     cancelarHabilitado,
                                     compacto: panelConductorAsignado,
+                                    // El panel del conductor ya incluye Llamar/WA/Chat;
+                                    // no duplicar arriba (tapaba el mapa y congelaba el scroll).
+                                    reforzarComunicacionEnSticky: false,
                                   ),
                                   _viajeSheetDivider(),
+                                  ],
+
+                                  if (faseAbordoPin)
+                                    ..._buildClienteAbordoSheetBodyChildren(
+                                      v: v,
+                                      data: data,
+                                      estadoBase: estadoBase,
+                                      estadoEfectivo: estadoEfectivo,
+                                      panelConductorAsignado:
+                                          panelConductorAsignado,
+                                      mostrarCodigoCliente:
+                                          mostrarCodigoCliente,
+                                      codigoVerificado: codigoVerificado,
+                                      codigoVerificacion: codigoVerificacion,
+                                      mostrarBotonTocaPinGrande:
+                                          mostrarBotonTocaPinGrande,
+                                      pinEnZonaFija: mostrarCodigoCliente,
+                                    )
+                                  else ...<Widget>[
+
+                                  if (mostrarCodigoCliente) ...[
+                                    _buildCodigoVerificacionClienteSection(
+                                      codigoVerificacion: codigoVerificacion,
+                                      codigoVerificado: codigoVerificado,
+                                      estadoBase: estadoBase,
+                                      mostrarCodigo: mostrarCodigoCliente,
+                                      esMotor: v.esMotor,
+                                      viajeIdParaActualizar: v.id,
+                                      integradoEnPanelConductor: true,
+                                    ),
+                                    const SizedBox(height: 12),
+                                  ],
 
                                   // Mensaje solo para reservas futuras (no motor/taxi «ahora» en pool)
                                   if (estadoBase == EstadosViaje.pendiente &&
@@ -6104,10 +8145,12 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       !v.esAhora)
                                     Container(
                                       padding: const EdgeInsets.all(12),
-                                      margin: const EdgeInsets.only(bottom: 16),
+                                      margin:
+                                          const EdgeInsets.only(bottom: 16),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF1E1A0F),
-                                        borderRadius: BorderRadius.circular(16),
+                                        borderRadius:
+                                            BorderRadius.circular(16),
                                         border: Border.all(
                                             color: Colors.orangeAccent
                                                 .withAlpha(120)),
@@ -6122,7 +8165,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                               'Tu viaje está programado. Te avisaremos cuando un taxista lo acepte.',
                                               style: TextStyle(
                                                   color: Colors.white,
-                                                  fontWeight: FontWeight.w700),
+                                                  fontWeight:
+                                                      FontWeight.w700),
                                             ),
                                           ),
                                         ],
@@ -6133,27 +8177,53 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     ClienteEsperaTaxistaPanel(
                                       viaje: v,
                                       esMotor: v.esMotor,
-                                      conductoresCerca: driversSortedMapa.length,
+                                      conductoresCerca:
+                                          driversSortedMapa.length,
                                       docsOrdenados: driversSortedMapa,
                                       fotoPorUid: _driverFotoPorUid,
                                       inicioEspera: inicioEsperaBusqueda,
                                     ),
 
+                                  _wrapSelectorMetodoPago(
+                                    v: v,
+                                    data: data,
+                                    estadoEfectivo: estadoBase,
+                                  ),
+
                                   if (panelConductorAsignado)
                                     ClienteViajeConductorAsignadoPanel(
                                       viaje: v,
-                                      estadoBase: estadoBase,
-                                      etaLinea:
-                                          _lineaEtaPickupCliente(v, estadoBase),
+                                      estadoBase: estadoEfectivo,
+                                      etaLinea: _lineaEtaPickupCliente(
+                                        v,
+                                        estadoEfectivo,
+                                      ),
                                       etaTituloHttp: _pickupEtaTitulo,
                                       conductorCard: _buildDriverCard(
                                         v,
                                         soloDatosConductor: true,
                                       ),
-                                      onLlamar: () => _llamarConductorCliente(v),
+                                      pinAbordo: mostrarCodigoCliente &&
+                                              !faseAbordoPin
+                                          ? _buildCodigoVerificacionClienteSection(
+                                              codigoVerificacion:
+                                                  codigoVerificacion,
+                                              codigoVerificado:
+                                                  codigoVerificado,
+                                              estadoBase: estadoBase,
+                                              mostrarCodigo:
+                                                  mostrarCodigoCliente,
+                                              esMotor: v.esMotor,
+                                              viajeIdParaActualizar: v.id,
+                                              integradoEnPanelConductor: true,
+                                            )
+                                          : null,
+                                      onLlamar: () =>
+                                          _llamarConductorCliente(v),
                                       onWhatsApp: () =>
                                           _whatsAppConductorCliente(v),
-                                      onChat: () => _abrirChatConductorCliente(v),
+                                      onChat: () =>
+                                          _abrirChatConductorCliente(v),
                                       onVerEnMapa: () => _centrarEnTaxista(v),
                                       onCentrarMapa: _isValidCoord(
                                               v.latTaxista, v.lonTaxista)
@@ -6163,12 +8233,20 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           ? inicioCaminoConductor
                                           : null,
                                     ),
-
+                                  if (mostrarBotonTocaPinGrande && fasePickupConductor) ...[
+                                    const SizedBox(height: 10),
+                                    _buildBotonTocaActualizarViaje(
+                                      viajeId: v.id,
+                                      enEsperaAbordo: true,
+                                    ),
+                                  ],
                                   if (v.uidTaxista.isNotEmpty &&
                                       !panelConductorAsignado &&
-                                      _isValidCoord(v.latTaxista, v.lonTaxista))
+                                      _isValidCoord(
+                                          v.latTaxista, v.lonTaxista))
                                     Container(
-                                      margin: const EdgeInsets.only(bottom: 16),
+                                      margin:
+                                          const EdgeInsets.only(bottom: 16),
                                       padding: const EdgeInsets.all(14),
                                       decoration: BoxDecoration(
                                         gradient: const LinearGradient(
@@ -6179,14 +8257,16 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           begin: Alignment.topLeft,
                                           end: Alignment.bottomRight,
                                         ),
-                                        borderRadius: BorderRadius.circular(18),
+                                        borderRadius:
+                                            BorderRadius.circular(18),
                                         border: Border.all(
-                                          color:
-                                              Colors.greenAccent.withValues(alpha: 0.45),
+                                          color: Colors.greenAccent
+                                              .withValues(alpha: 0.45),
                                         ),
                                       ),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           const Row(
                                             children: [
@@ -6199,7 +8279,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                                   'Ahi viene tu taxi',
                                                   style: TextStyle(
                                                     color: Colors.white,
-                                                    fontWeight: FontWeight.w800,
+                                                    fontWeight:
+                                                        FontWeight.w800,
                                                     fontSize: 16,
                                                   ),
                                                 ),
@@ -6208,7 +8289,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                           ),
                                           const SizedBox(height: 8),
                                           Text(
-                                            _lineaEtaPickupCliente(v, estadoBase),
+                                            _lineaEtaPickupCliente(
+                                                v, estadoBase),
                                             style: const TextStyle(
                                               color: Colors.white70,
                                               height: 1.3,
@@ -6218,56 +8300,6 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
 
-                                  if (v.esTurismo && v.uidTaxista.isNotEmpty)
-                                    Container(
-                                      margin: const EdgeInsets.only(bottom: 16),
-                                      padding: const EdgeInsets.all(14),
-                                      decoration: BoxDecoration(
-                                        color: Colors.deepPurple
-                                            .withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                            color: Colors.purpleAccent
-                                                .withValues(alpha: 0.45)),
-                                      ),
-                                      child: const Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Icon(
-                                            Icons.travel_explore,
-                                            color: Colors.purpleAccent,
-                                            size: 26,
-                                          ),
-                                          SizedBox(width: 12),
-                                          Expanded(
-                                            child: Text(
-                                              'Viaje turístico: asignación y seguimiento coordinados por administración. '
-                                              'Cronómetro, código y comisiones siguen el mismo flujo que un viaje normal.',
-                                              style: TextStyle(
-                                                  color: Colors.white70,
-                                                  height: 1.35,
-                                                  fontSize: 13),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-
-                                  // Transferencia: cuenta completa desde abordo / en ruta.
-                                  if (_mostrarSelectorMetodoPagoCliente(
-                                      v, estadoBase, data))
-                                    Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 10),
-                                      child: ViajeMetodoPagoSelector(
-                                        viajeId: v.id,
-                                        metodoPagoActual: (data['metodoPago'] ??
-                                                v.metodoPago)
-                                            .toString(),
-                                        fondoOscuro: true,
-                                      ),
-                                    ),
                                   if (_mostrarAvisoTarjetaPreAbordo(
                                       v, estadoBase, data))
                                     Padding(
@@ -6285,10 +8317,13 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                                 .withValues(alpha: 0.35),
                                           ),
                                         ),
-                                        child: const Text(
-                                          'Pago con tarjeta: cuando subas al vehículo y verifiques el código '
-                                          'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.',
-                                          style: TextStyle(
+                                        child: Text(
+                                          PagoTarjetaClienteGate.bloqueado
+                                              ? 'Pago con tarjeta (en desarrollo): cuando subas al vehículo y verifiques el código '
+                                                  'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.'
+                                              : 'Pago con tarjeta: cuando subas al vehículo y verifiques el código '
+                                                  'con el conductor, verás el botón para pagar desde la app antes de llegar al destino.',
+                                          style: const TextStyle(
                                             color: Colors.white70,
                                             fontSize: 13,
                                             height: 1.35,
@@ -6297,7 +8332,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
                                   if (_mostrarAvisoTransferenciaPreAbordo(
-                                      v, estadoBase))
+                                      v, estadoBase, data))
                                     Padding(
                                       padding:
                                           const EdgeInsets.only(bottom: 10),
@@ -6326,7 +8361,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
                                   if (_mostrarDatosTransferenciaCliente(
-                                      v, estadoBase)) ...[
+                                      v, estadoBase, data)) ...[
                                     Padding(
                                       padding:
                                           const EdgeInsets.only(bottom: 10),
@@ -6355,32 +8390,38 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       ),
                                     ),
                                     _buildDatosBancarios(
-                                        v, _uidTaxistaDelViaje(v, data), v.precio, data),
+                                      v,
+                                      _uidTaxistaDelViaje(v, data),
+                                      v.precio,
+                                      data,
+                                    ),
                                     const SizedBox(height: 16),
                                   ],
 
-                                  // Conductor primero: placa, llamada, WhatsApp y mapa visibles antes del detalle del viaje.
                                   if (v.uidTaxista.isNotEmpty &&
                                       !panelConductorAsignado) ...[
-                                    _buildDriverCard(v, soloDatosConductor: true),
+                                    _buildDriverCard(v,
+                                        soloDatosConductor: true),
                                     const SizedBox(height: 16),
                                     _buildCodigoVerificacionClienteSection(
                                       codigoVerificacion: codigoVerificacion,
-                                      codigoVerificado: codigoVerificado,
-                                      estadoBase: estadoBase,
-                                      mostrarCodigo: mostrarCodigoCliente,
-                                      esMotor: v.esMotor,
-                                    ),
+codigoVerificado: codigoVerificado,
+estadoBase: estadoBase,
+mostrarCodigo: mostrarCodigoCliente,
+esMotor: v.esMotor,
+viajeIdParaActualizar: v.id,
+),
                                   ],
                                   if (panelConductorAsignado) ...[
-                                    const SizedBox(height: 12),
-                                    _buildCodigoVerificacionClienteSection(
-                                      codigoVerificacion: codigoVerificacion,
-                                      codigoVerificado: codigoVerificado,
-                                      estadoBase: estadoBase,
-                                      mostrarCodigo: mostrarCodigoCliente,
-                                      esMotor: v.esMotor,
-                                    ),
+                                    if (mostrarBotonTocaPinGrande &&
+                                        faseAbordoPin &&
+                                        !mostrarCodigoCliente) ...[
+                                      const SizedBox(height: 10),
+                                      _buildBotonTocaActualizarViaje(
+                                        viajeId: v.id,
+                                        enEsperaAbordo: false,
+                                      ),
+                                    ],
                                   ],
                                   if (_mostrarPagoTarjetaCliente(
                                     v,
@@ -6406,7 +8447,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       padding: const EdgeInsets.all(12),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF10231A),
-                                        borderRadius: BorderRadius.circular(12),
+                                        borderRadius:
+                                            BorderRadius.circular(12),
                                         border: Border.all(
                                           color: Colors.greenAccent
                                               .withValues(alpha: 0.45),
@@ -6448,7 +8490,7 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
 
                                   // Tarjeta de información del viaje (omitida si panel compacto ya resume origen/destino)
                                   if (!panelConductorAsignado)
-                                    _buildTripInfoCard(v, estadoBase),
+                                    _buildTripInfoCard(v, estadoEfectivo),
 
                                   if (_simCasa) ...[
                                     const SizedBox(height: 12),
@@ -6457,7 +8499,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                       padding: const EdgeInsets.all(12),
                                       decoration: BoxDecoration(
                                         color: const Color(0xFF3E2723),
-                                        borderRadius: BorderRadius.circular(12),
+                                        borderRadius:
+                                            BorderRadius.circular(12),
                                         border: Border.all(
                                           color: Colors.deepOrangeAccent
                                               .withValues(alpha: 0.6),
@@ -6519,7 +8562,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                                   ? 'Quitar “conductor cerca”'
                                                   : 'Simular conductor cerca del pickup',
                                               style: const TextStyle(
-                                                color: Colors.deepOrangeAccent,
+                                                color:
+                                                    Colors.deepOrangeAccent,
                                                 fontWeight: FontWeight.w600,
                                               ),
                                             ),
@@ -6529,6 +8573,8 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     ),
                                   ],
 
+                                  ],
+
                                   if (_paradasIntermediasResueltas(v)
                                           .isNotEmpty &&
                                       !_clienteNavegacionMultiparadaActiva(
@@ -6536,8 +8582,15 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                                     const SizedBox(height: 16),
                                     _buildParadasWidget(v),
                                   ],
-                                ],
+                                  _bannerIdaYVuelta(v),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
+                            ),
                             );
                           },
                         ),
@@ -6547,7 +8600,87 @@ class _ViajeEnCursoClienteState extends State<ViajeEnCursoCliente>
                 );
               },
             ),
+    ),
+);
+  }
+}
+
+class _ClienteCargaViajeGate extends StatefulWidget {
+  const _ClienteCargaViajeGate({
+    required this.mensaje,
+    required this.onVolverInicio,
+    this.onReintentar,
+  });
+
+  final String mensaje;
+  final VoidCallback onVolverInicio;
+  final VoidCallback? onReintentar;
+
+  @override
+  State<_ClienteCargaViajeGate> createState() => _ClienteCargaViajeGateState();
+}
+
+class _ClienteCargaViajeGateState extends State<_ClienteCargaViajeGate> {
+  static const Duration _kTimeout = Duration(seconds: 12);
+  Timer? _timer;
+  bool _mostrarEscape = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(_kTimeout, () {
+      if (!mounted) return;
+      setState(() => _mostrarEscape = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Colors.greenAccent,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              widget.mensaje,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+            if (_mostrarEscape) ...[
+              const SizedBox(height: 20),
+              if (widget.onReintentar != null) ...[
+                OutlinedButton.icon(
+                  onPressed: widget.onReintentar,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Reintentar'),
+                ),
+                const SizedBox(height: 8),
+              ],
+              OutlinedButton.icon(
+                onPressed: widget.onVolverInicio,
+                icon: const Icon(Icons.home_rounded, size: 18),
+                label: const Text('Ir al inicio'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
-}
+} 

@@ -8,6 +8,12 @@ class NavegacionExternaLauncher {
 
   static String fmtCoord(double v) => v.toStringAsFixed(6);
 
+  static bool coordsValidas(double lat, double lon) {
+    if (!lat.isFinite || !lon.isFinite) return false;
+    if (lat == 0 && lon == 0) return false;
+    return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+  }
+
   /// En laptop/web: solo HTTPS y pestaña nueva.
   /// Los schemes `google.navigation:` / `geo:` / `waze://` dejan la app en blanco
   /// (navegan la misma pestaña a una URL inválida).
@@ -52,6 +58,7 @@ class NavegacionExternaLauncher {
   }
 
   static Future<void> abrirGoogleMapsDestino(double lat, double lon) async {
+    if (!coordsValidas(lat, lon)) return;
     final String la = fmtCoord(lat);
     final String lo = fmtCoord(lon);
     final googleWeb = Uri.parse(
@@ -88,21 +95,36 @@ class NavegacionExternaLauncher {
     await tryLaunch(web, preferExternalApp: false);
   }
 
-  static Future<void> abrirWazeDestino(double lat, double lon) async {
+  /// Abre Waze en el pin exacto. Sin coordenadas válidas no abre (evita «Cerca de ti» vacío).
+  static Future<bool> abrirWazeDestino(double lat, double lon) async {
+    if (!coordsValidas(lat, lon)) return false;
     final String la = fmtCoord(lat);
     final String lo = fmtCoord(lon);
-    final wazeWeb = Uri.parse('https://waze.com/ul?ll=$la,$lo&navigate=yes');
+    final String pair = '$la,$lo';
+    final Uri wazeWeb = Uri.parse(
+      'https://www.waze.com/ul?ll=$pair&navigate=yes&zoom=17',
+    );
+    final Uri wazeDeep = Uri.parse('waze://?ll=$pair&navigate=yes');
+    final Uri geoPin = Uri.parse('geo:$pair?q=$pair');
 
     if (kIsWeb) {
-      if (await tryLaunch(wazeWeb)) return;
+      if (await tryLaunch(wazeWeb)) return true;
       await abrirGoogleMapsDestino(lat, lon);
-      return;
+      return true;
     }
 
-    final wazeDeep = Uri.parse('waze://?ll=$la,$lo&navigate=yes');
-    if (await tryLaunch(wazeDeep)) return;
-    if (await tryLaunch(wazeWeb, preferExternalApp: false)) return;
+    // Moto/Android a veces pierde `ll=` al abrir solo el enlace HTTPS.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      if (await tryLaunch(wazeDeep)) return true;
+      if (await tryLaunch(geoPin)) return true;
+    }
+
+    if (await tryLaunch(wazeWeb, preferExternalApp: true)) return true;
+    if (await tryLaunch(wazeDeep)) return true;
+    if (await tryLaunch(geoPin)) return true;
+    if (await tryLaunch(wazeWeb, preferExternalApp: false)) return true;
     await abrirGoogleMapsDestino(lat, lon);
+    return true;
   }
 
   /// Google Maps URL: máx. 9 paradas intermedias entre origen y destino.
@@ -116,7 +138,13 @@ class NavegacionExternaLauncher {
     required double destinoLon,
     List<({double lat, double lon})> paradas = const [],
   }) async {
-    var paradasUsar = paradas;
+    if (!coordsValidas(origenLat, origenLon) ||
+        !coordsValidas(destinoLat, destinoLon)) {
+      return;
+    }
+    var paradasUsar = paradas
+        .where((p) => coordsValidas(p.lat, p.lon))
+        .toList(growable: false);
     if (paradas.length > maxParadasIntermediasGoogleMaps) {
       paradasUsar = paradas.sublist(0, maxParadasIntermediasGoogleMaps);
       if (kDebugMode) {
@@ -149,20 +177,14 @@ class NavegacionExternaLauncher {
     await abrirGoogleMapsDestino(destinoLat, destinoLon);
   }
 
-  static Future<void> abrirWazeBusqueda(String query) async {
-    final q = Uri.encodeComponent(query);
-    final wazeWeb = Uri.parse('https://waze.com/ul?q=$q&navigate=yes');
-
-    if (kIsWeb) {
-      if (await tryLaunch(wazeWeb)) return;
-      await abrirGoogleMapsDireccion(query);
-      return;
+  /// Búsqueda por texto en Waze deshabilitada: provoca «Cerca de ti — sin resultados».
+  static Future<bool> abrirWazeBusqueda(String query) async {
+    if (kDebugMode) {
+      debugPrint(
+        '[nav_ext] abrirWazeBusqueda bloqueado (sin GPS): ${query.trim()}',
+      );
     }
-
-    final wazeDeep = Uri.parse('waze://?q=$q&navigate=yes');
-    if (await tryLaunch(wazeDeep)) return;
-    if (await tryLaunch(wazeWeb, preferExternalApp: false)) return;
-    await abrirGoogleMapsDireccion(query);
+    return false;
   }
 
   /// Abre un enlace guardado (p. ej. ruta corporativa en Google Maps / Waze).

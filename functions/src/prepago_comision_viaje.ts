@@ -59,7 +59,17 @@ function toCents(v: unknown): number {
   return 0;
 }
 
-/** Solo efectivo: comisión RAI desde prepago. Digital → liquidación semanal. */
+/** Cliente paga a cuenta RAI (tarjeta/transfer conciliada): liquidación semanal, no prepago. */
+export function viajeRecaudoEnCuentaRai(viaje: AnyMap): boolean {
+  const ref = String(viaje.referenciaRecaudo ?? "").trim();
+  const dest = String(viaje.recaudoDestino ?? "").trim().toLowerCase();
+  return ref.length > 0 || dest === "rai";
+}
+
+/**
+ * Comisión RAI desde prepago del conductor cuando el cliente paga al conductor
+ * (efectivo o transferencia P2P). Tarjeta / recaudo en cuenta RAI → liquidación semanal.
+ */
 export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
   // Paridad con Flutter PagosTaxistaRepo.viajeAplicaComisionPrepago.
   if (viaje.corporativo === true) return false;
@@ -72,12 +82,17 @@ export function viajeAplicaComisionPrepago(viaje: AnyMap): boolean {
   const tipo = String(viaje.tipoServicio ?? "normal").trim().toLowerCase();
   if (tipo === "bola_ahorro") return false;
 
+  if (viajeRecaudoEnCuentaRai(viaje)) return false;
+
   const metodo = String(viaje.metodoPago ?? "").toLowerCase().trim();
   if (!metodo) return true;
-  return metodo.includes("efectivo") || metodo === "cash";
+  if (metodo.includes("tarjeta") || metodo.includes("card")) return false;
+  if (metodo.includes("efectivo") || metodo === "cash") return true;
+  if (metodo.includes("transfer")) return true;
+  return false;
 }
 
-/** Alias: prepago de comisión solo en efectivo. */
+/** Alias histórico: viajes con comisión desde prepago (efectivo + transferencia al conductor). */
 export function viajeEsEfectivoParaComisionPrepago(viaje: AnyMap): boolean {
   return viajeAplicaComisionPrepago(viaje);
 }
@@ -116,6 +131,9 @@ export function prepagoInsuficienteParaViajeEfectivo(args: {
   permitirViajeConPrepagoParcial?: boolean;
 }): boolean {
   if (args.permitirViajeConPrepagoParcial === true) return false;
+  const tipo = String(args.viajeData.tipoServicio ?? "").trim().toLowerCase();
+  // Turismo: viaje primero; comisión al cerrar (faltante → comisionPendiente).
+  if (tipo === "turismo") return false;
   if (!viajeAplicaComisionPrepago(args.viajeData)) return false;
 
   const bData = args.billeData ?? {};

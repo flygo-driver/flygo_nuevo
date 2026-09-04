@@ -47,18 +47,33 @@ export function normalizarCiudadNegocio(raw: string): string {
   return t;
 }
 
+function variantesCiudadNegocio(ciudadNegocio: string): string[] {
+  const out: string[] = [];
+  for (const parte of String(ciudadNegocio ?? "").split(/[,/|;]/)) {
+    const c = normalizarCiudadNegocio(parte);
+    if (c && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
 /** Origen y destino deben contener el pueblo del negocio (misma ciudad). */
 export function viajeEsLocalEnPuebloNegocio(params: {
   ciudadNegocio: string;
   origen: string;
   destino: string;
+  origenGeoExtra?: string;
+  destinoGeoExtra?: string;
 }): boolean {
-  const c = normalizarCiudadNegocio(params.ciudadNegocio);
-  if (!c) return false;
-  const o = normalizarCiudadNegocio(params.origen);
-  const d = normalizarCiudadNegocio(params.destino);
+  const variantes = variantesCiudadNegocio(params.ciudadNegocio);
+  if (!variantes.length) return false;
+  const o = normalizarCiudadNegocio(
+    `${params.origen} ${params.origenGeoExtra ?? ""}`,
+  );
+  const d = normalizarCiudadNegocio(
+    `${params.destino} ${params.destinoGeoExtra ?? ""}`,
+  );
   if (!o || !d) return false;
-  return o.includes(c) && d.includes(c);
+  return variantes.some((c) => o.includes(c) && d.includes(c));
 }
 
 function stripNegocioAliadoTripFields(trip: AnyMap): void {

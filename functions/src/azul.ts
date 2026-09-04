@@ -861,6 +861,11 @@ export const cambiarTarjetaAEfectivoViaje = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "El pago con tarjeta ya no está pendiente");
     }
 
+    const montoDeuda =
+      typeof v.cobroClienteMontoRd === "number" && Number.isFinite(v.cobroClienteMontoRd)
+        ? Number(v.cobroClienteMontoRd)
+        : precioCentsViaje(v) / 100;
+
     const patchViaje: AnyMap = {
       metodoPago: "Efectivo",
       metodoPagoNormalizado: "efectivo",
@@ -868,6 +873,10 @@ export const cambiarTarjetaAEfectivoViaje = onCall(async (request) => {
       tarjetaCambioEfectivoEn: now,
       metodoPagoUpdatedBy: uid,
       metodoPagoUpdatedAt: now,
+      cobroClientePendiente: false,
+      cobroClienteEstado: "regularizado",
+      "payment.provider": "cash",
+      "payment.status": "cash_collected",
       "payment.supersededByEfectivo": true,
       "payment.supersededAt": now,
       "payment.updatedAt": now,
@@ -875,6 +884,18 @@ export const cambiarTarjetaAEfectivoViaje = onCall(async (request) => {
       actualizadoEn: now,
     };
     tx.update(viajeRef, patchViaje);
+
+    if (uidCliente && v.cobroClientePendiente === true) {
+      tx.set(
+        db().collection("usuarios").doc(uidCliente),
+        {
+          tieneCobroViajePendiente: false,
+          deudaViajesClienteRd: FieldValue.increment(-montoDeuda),
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+    }
 
     const pSnap = await tx.get(pagoRef);
     if (pSnap.exists) {

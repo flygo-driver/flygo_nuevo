@@ -109,14 +109,11 @@ abstract final class RaiMapVehicleIcons {
     return bearingEntre(anterior, actual) ?? fallback;
   }
 
-  /// Vista cliente: rojo solo en fase recogida (viene hacia ti). En ruta al destino = taxi normal.
+  /// Vista cliente: taxi amarillo en vivo (rotación + animación). Sin tinte rojo en mapa.
   static BitmapDescriptor? iconoVistaCliente({
     required bool esMiConductor,
     required bool faseRecogida,
   }) {
-    if (esMiConductor && faseRecogida) {
-      return taxiClienteAsignado ?? taxiCliente;
-    }
     return taxiCliente;
   }
 

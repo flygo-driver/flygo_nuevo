@@ -64,6 +64,20 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<String> _viajeIdParaChat() async {
+    final directo = (widget.viajeId ?? '').trim();
+    if (directo.isNotEmpty) return directo;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(miUid)
+          .get();
+      return (snap.data()?['viajeActivoId'] ?? '').toString().trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
   Future<void> _prepare() async {
     if (miUid.isEmpty) {
       if (!mounted) return;
@@ -82,11 +96,21 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     try {
-      final cid = await ChatRepo.resolveOrCreateChatId(
-        uidA: miUid,
-        uidB: widget.otroUid,
-        viajeId: widget.viajeId,
+      final viajeId = await _viajeIdParaChat();
+      // ignore: avoid_print
+      print(
+        '[CHAT] prepare miUid=$miUid otroUid=${widget.otroUid.trim()} viajeId=$viajeId',
       );
+      final cid = viajeId.isNotEmpty
+          ? await ChatRepo.prepareViajeChat(
+              viajeId: viajeId,
+              uidA: miUid,
+              uidB: widget.otroUid,
+            )
+          : await ChatRepo.resolveOrCreateChatId(
+              uidA: miUid,
+              uidB: widget.otroUid,
+            );
       if (!mounted) return;
       setState(() {
         chatId = cid;

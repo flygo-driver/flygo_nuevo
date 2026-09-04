@@ -269,8 +269,12 @@ class ClientePerfilConductorChip extends StatelessWidget {
     final String detalle = switch (estado) {
       ClienteVerificacionIdentidadEstado.vigente =>
         'Confirmó identidad con selfie reciente en RAI.',
+      ClienteVerificacionIdentidadEstado.porRevisar =>
+        'Envió su selfie; RAI todavía la está revisando.',
       ClienteVerificacionIdentidadEstado.vencida =>
         'La confirmación con selfie está vencida o pendiente.',
+      ClienteVerificacionIdentidadEstado.rechazada =>
+        'RAI rechazó su última selfie; debe enviar otra.',
       ClienteVerificacionIdentidadEstado.sinSelfie =>
         'Aún no ha enviado selfie de confirmación en RAI.',
       ClienteVerificacionIdentidadEstado.noAplica => '',

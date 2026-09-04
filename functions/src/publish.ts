@@ -39,12 +39,23 @@ function computeFieldsOnCreate(data: FirebaseFirestore.DocumentData, now: Date) 
   // fecha del viaje
   const fechaViaje = toDateSafe(data.fechaHora, now);
 
-  const esAhora =
-    fechaViaje.getTime() <= now.getTime() + AHORA_THRESHOLD_MINUTES * 60_000;
-  const programado = !esAhora;
-
   const pickupMs = fechaViaje.getTime();
   const nowMs = now.getTime();
+
+  const clientSetWindows =
+    data.publishAt instanceof Timestamp && data.acceptAfter instanceof Timestamp;
+
+  // Si la app ya fijó ventanas (programar / forzarEsAhora), no recalcular esAhora con umbral 15 min.
+  let esAhora: boolean;
+  let programado: boolean;
+  if (clientSetWindows && (data.esAhora === true || data.esAhora === false)) {
+    esAhora = data.esAhora === true;
+    programado = data.programado === true ? true : !esAhora;
+  } else {
+    esAhora =
+      pickupMs <= nowMs + AHORA_THRESHOLD_MINUTES * 60_000;
+    programado = !esAhora;
+  }
 
   // Respetar si ya vienen set, si no, calcular (misma política que TripPublishWindows en la app)
   const publishAt: Date = (data.publishAt instanceof Timestamp)
@@ -112,6 +123,16 @@ export const viajeOnCreate = onDocumentCreated(`/${COLL}/{id}`, async (event) =>
 
   const patch = computeFieldsOnCreate(data, now);
 
+  const tipoTurismo = String(data.tipoServicio ?? "").trim() === "turismo";
+  if (tipoTurismo && patch.esAhora === true) {
+    (patch as Record<string, unknown>).canalAsignacion = "turismo_pool";
+    (patch as Record<string, unknown>).liberadoPoolTurismoEn = svNow();
+    const estadoRaw = String(data.estado ?? patch.estado ?? "").trim();
+    if (estadoRaw === "pendiente_admin" || estadoRaw === "pendienteAdmin") {
+      (patch as Record<string, unknown>).estado = "pendiente";
+    }
+  }
+
   await snap.ref.set(patch, { merge: true });
   logger.info("publish: viaje normalizado en onCreate", {
     id: snap.id,
@@ -160,6 +181,13 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
           esAhora,
           updatedAt: svNow(),
           actualizadoEn: svNow(),
+          ...(String(d.tipoServicio ?? "").trim() === "turismo" &&
+          String(d.canalAsignacion ?? "admin").trim() === "admin"
+            ? {
+                canalAsignacion: "turismo_pool",
+                liberadoPoolTurismoEn: svNow(),
+              }
+            : {}),
         });
         writes++;
 
@@ -171,6 +199,48 @@ export const publishDueTrips = onSchedule("every 1 minutes", async () => {
       }
       if (writes > 0) await batch.commit();
       logger.info(`publish: publicados ${snaps.size} viajes (publishAt <= now).`);
+    }
+  }
+
+  // ---- A2) Turismo programado (pendiente_admin): liberar al pool turístico ----
+  {
+    const q = db().collection(COLL)
+      .where("tipoServicio", "==", "turismo")
+      .where("canalAsignacion", "==", "admin")
+      .where("estado", "in", ["pendiente_admin", "pendienteAdmin"])
+      .where("uidTaxista", "==", "")
+      .where("publishAt", "<=", nowTs)
+      .limit(200);
+
+    const snaps = await q.get();
+    if (!snaps.empty) {
+      let batch = db().batch();
+      let writes = 0;
+
+      for (const doc of snaps.docs) {
+        const d = doc.data();
+        const acceptAfter = d.acceptAfter;
+        if (acceptAfter instanceof Timestamp && acceptAfter.toDate() > now) {
+          continue;
+        }
+        batch.update(doc.ref, {
+          canalAsignacion: "turismo_pool",
+          estado: "pendiente",
+          publicado: true,
+          liberadoPoolTurismoEn: svNow(),
+          updatedAt: svNow(),
+          actualizadoEn: svNow(),
+        });
+        writes++;
+
+        if (writes >= 450) {
+          await batch.commit();
+          batch = db().batch();
+          writes = 0;
+        }
+      }
+      if (writes > 0) await batch.commit();
+      logger.info(`publish: turismo liberado al pool ${writes} viajes.`);
     }
   }
 

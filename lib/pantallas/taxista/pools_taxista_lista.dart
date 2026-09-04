@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/telefono_viaje.dart';
 import 'package:flygo_nuevo/utils/pool_gira_cancelar_ui.dart';
 import 'package:flygo_nuevo/utils/pool_recaudo_central.dart';
+import 'package:flygo_nuevo/utils/pool_gira_compartir_redes.dart';
 import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/widgets/pool_recaudo_central_taxista_panel.dart';
@@ -950,6 +951,31 @@ $hashtags
                           icon: const Icon(Icons.chat_bubble_outline),
                           label: const Text('WhatsApp a todos'),
                         ),
+                        FilledButton.icon(
+                          onPressed: () async {
+                            final cuposDisponibles = (cap - occ).clamp(0, cap);
+                            final textoPromo = _buildPromoTexto(
+                              d: d,
+                              fechaSalida: fechaSalida,
+                              paradas: paradas,
+                              cuposDisponibles: cuposDisponibles,
+                              poolId: id,
+                            );
+                            await PoolGiraCompartirRedes.compartir(
+                              context: context,
+                              textoPromo: textoPromo,
+                              poolId: id,
+                              bannerUrl: PoolGiraCompartirRedes.primerBannerUrl(d),
+                            );
+                          },
+                          icon: const Icon(Icons.share_rounded, size: 18),
+                          label: const Text('Compartir en redes'),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => PoolGiraCompartirRedes.copiarEnlace(context, id),
+                          icon: const Icon(Icons.link_rounded, size: 18),
+                          label: const Text('Copiar enlace'),
+                        ),
                         TextButton.icon(
                           onPressed: () {
                             final cuposDisponibles = (cap - occ).clamp(0, cap);
@@ -962,8 +988,13 @@ $hashtags
                             );
                             _compartirWhatsAppPromo(context, texto: textoPromo);
                           },
-                          icon: const Icon(Icons.campaign_outlined),
-                          label: const Text('Publicar por WhatsApp'),
+                          icon: const Icon(Icons.chat_outlined, size: 18),
+                          label: const Text('WhatsApp chat'),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => PoolGiraCompartirRedes.mostrarAyuda(context),
+                          icon: const Icon(Icons.help_outline_rounded, size: 18),
+                          label: const Text('¿Cómo?'),
                         ),
                         TextButton.icon(
                           onPressed: () {

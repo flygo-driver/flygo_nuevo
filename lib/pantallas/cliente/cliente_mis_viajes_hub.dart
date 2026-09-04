@@ -1,10 +1,11 @@
-import 'dart:async';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/pantallas/cliente/historial_cliente.dart';
 import 'package:flygo_nuevo/pantallas/cliente/reservas_programadas_cliente.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
@@ -27,11 +28,29 @@ class ClienteMisViajesHub extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         children: [
           if (uid != null)
-            StreamBuilder(
-              stream: ViajesRepo.streamEstadoViajePorCliente(uid),
-              builder: (context, s) {
-                final activo = s.data != null;
-                return _HubTile(
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('usuarios')
+                  .doc(uid)
+                  .snapshots(),
+              builder: (context, userSnap) {
+                final String vidFirestore = (userSnap.data?.data()?['viajeActivoId'] ??
+                        '')
+                    .toString()
+                    .trim();
+                final String vidPausa =
+                    ActiveTripService.viajeIdPausaVoluntariaCliente;
+                final String vidEfectivo =
+                    ActiveTripService.resolverViajeIdClienteParaPausa(
+                  preferido: vidFirestore.isNotEmpty ? vidFirestore : vidPausa,
+                );
+
+                return StreamBuilder<Viaje?>(
+                  stream: ViajesRepo.streamEstadoViajePorCliente(uid),
+                  builder: (context, s) {
+                    final bool activo =
+                        s.data != null || vidEfectivo.isNotEmpty;
+                    return _HubTile(
                   icon: Icons.directions_car_outlined,
                   title: 'Viaje en curso',
                   subtitle: activo
@@ -58,12 +77,32 @@ class ClienteMisViajesHub extends StatelessWidget {
                           ),
                         )
                       : null,
-                  onTap: () {
-                    unawaited(
-                      NavigationService.clearAndGoViajeEnCursoCliente(
-                        preNav: Navigator.of(context, rootNavigator: true),
-                      ),
-                    );
+                  onTap: () async {
+                    if (!activo) {
+                      final String? hidratado =
+                          await ActiveTripService.hidratarViajeActivoCliente(
+                        uid,
+                      );
+                      if (hidratado == null || hidratado.isEmpty) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                              'No tienes un viaje activo. Revisa «Reservas programadas» '
+                              'o solicita un viaje desde Inicio.',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                    }
+                    NavigationService.retomarViajeActivoCliente();
+                  },
+                );
                   },
                 );
               },
@@ -71,7 +110,7 @@ class ClienteMisViajesHub extends StatelessWidget {
           _HubTile(
             icon: Icons.event_available_outlined,
             title: 'Reservas programadas',
-            subtitle: 'Seguimiento y pool de conductores',
+            subtitle: 'Próximas recogidas y seguimiento del pool',
             onTap: () {
               Navigator.push(
                 context,
@@ -84,7 +123,7 @@ class ClienteMisViajesHub extends StatelessWidget {
           _HubTile(
             icon: Icons.history,
             title: 'Historial',
-            subtitle: 'Completados y pendientes',
+            subtitle: 'Viajes completados · factura y detalle',
             onTap: () {
               Navigator.push(
                 context,

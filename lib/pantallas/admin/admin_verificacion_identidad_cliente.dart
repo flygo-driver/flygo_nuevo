@@ -1,15 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:flygo_nuevo/servicios/admin_usuarios_lista_service.dart';
+import 'package:flygo_nuevo/servicios/flygo_storage.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/widgets/admin_app_bar.dart';
 import 'package:flygo_nuevo/widgets/admin_drawer.dart';
 
 import 'admin_ui_theme.dart';
 
-/// ADM solo lectura: confirmación periódica (selfie) de clientes.
+/// ADM: revisa la confirmación periódica (selfie) de clientes y la aprueba o rechaza.
 class AdminVerificacionIdentidadCliente extends StatefulWidget {
   const AdminVerificacionIdentidadCliente({super.key});
 
@@ -36,12 +38,97 @@ class _AdminVerificacionIdentidadClienteState
     switch (_filtro) {
       case 'vigente':
         return estado == ClienteVerificacionIdentidadEstado.vigente;
+      case 'revisar':
+        return estado == ClienteVerificacionIdentidadEstado.porRevisar;
+      case 'rechazada':
+        return estado == ClienteVerificacionIdentidadEstado.rechazada;
       case 'vencida':
         return estado == ClienteVerificacionIdentidadEstado.vencida;
       case 'sin':
         return estado == ClienteVerificacionIdentidadEstado.sinSelfie;
       default:
         return true;
+    }
+  }
+
+  Future<void> _aprobar(String uid, String nombre) async {
+    final String? adminUid = FirebaseAuth.instance.currentUser?.uid;
+    if (adminUid == null) return;
+    try {
+      await ClienteVerificacionIdentidadService.aprobarSelfie(
+        uid: uid,
+        adminUid: adminUid,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Selfie de $nombre aprobada.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo aprobar: $e')),
+      );
+    }
+  }
+
+  Future<void> _rechazar(String uid, String nombre) async {
+    final String? adminUid = FirebaseAuth.instance.currentUser?.uid;
+    if (adminUid == null) return;
+    final ctrl = TextEditingController();
+    final String? motivo = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rechazar selfie'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Se le pedirá otra selfie a $nombre antes de su próximo viaje. '
+              'El motivo lo verá en pantalla.',
+              style: const TextStyle(fontSize: 13, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 120,
+              decoration: const InputDecoration(
+                labelText: 'Motivo',
+                hintText: 'Ej.: la foto no muestra el rostro',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Rechazar'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (motivo == null) return;
+    try {
+      await ClienteVerificacionIdentidadService.rechazarSelfie(
+        uid: uid,
+        adminUid: adminUid,
+        motivo: motivo.isEmpty ? 'La selfie no es válida.' : motivo,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Selfie de $nombre rechazada.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo rechazar: $e')),
+      );
     }
   }
 
@@ -57,8 +144,32 @@ class _AdminVerificacionIdentidadClienteState
         tel.contains(q);
   }
 
-  Future<void> _abrirSelfie(String? url) async {
+  Future<void> _abrirSelfie(String uid, String? url) async {
     final u = Uri.tryParse((url ?? '').trim());
+    if (RaiDocUrl.isFirestoreDoc(url)) {
+      final bytes = await ClienteVerificacionIdentidadService.bytesSelfieDesdeUrl(
+        uid: uid,
+        url: url,
+      );
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo cargar la selfie de respaldo.'),
+          ),
+        );
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => Dialog(
+          child: InteractiveViewer(
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+        ),
+      );
+      return;
+    }
     if (u == null ||
         !(u.hasScheme && (u.scheme == 'http' || u.scheme == 'https'))) {
       if (!mounted) return;
@@ -157,10 +268,33 @@ class _AdminVerificacionIdentidadClienteState
           ),
           if (selfieUrl != null) ...[
             const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: () => _abrirSelfie(selfieUrl),
-              icon: const Icon(Icons.photo_outlined, size: 18),
-              label: const Text('Ver última selfie'),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => _abrirSelfie(uid, selfieUrl),
+                  icon: const Icon(Icons.photo_outlined, size: 18),
+                  label: const Text('Ver última selfie'),
+                ),
+                if (estado != ClienteVerificacionIdentidadEstado.vigente)
+                  FilledButton.icon(
+                    onPressed: () =>
+                        _aprobar(uid, nombre.isNotEmpty ? nombre : uid),
+                    icon: const Icon(Icons.check_rounded, size: 18),
+                    label: const Text('Aprobar'),
+                  ),
+                if (estado != ClienteVerificacionIdentidadEstado.rechazada)
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        _rechazar(uid, nombre.isNotEmpty ? nombre : uid),
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    label: const Text('Rechazar'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+              ],
             ),
           ],
         ],
@@ -181,8 +315,8 @@ class _AdminVerificacionIdentidadClienteState
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Text(
-              'Solo lectura. Estado de la selfie periódica del pasajero '
-              '(no es verificación con documento ni liveness).',
+              'Selfie periódica del pasajero (no es verificación con documento ni '
+              'liveness). Al rechazarla se le pide otra antes de su próximo viaje.',
               style: TextStyle(
                 color: AdminUi.secondary(context),
                 fontSize: 12.5,
@@ -224,7 +358,9 @@ class _AdminVerificacionIdentidadClienteState
               runSpacing: 8,
               children: [
                 _chipFiltro('todos', 'Todos'),
-                _chipFiltro('vigente', 'Selfie al día'),
+                _chipFiltro('revisar', 'Por revisar'),
+                _chipFiltro('vigente', 'Aprobadas'),
+                _chipFiltro('rechazada', 'Rechazadas'),
                 _chipFiltro('vencida', 'Vencida'),
                 _chipFiltro('sin', 'Sin confirmación'),
               ],
@@ -233,7 +369,7 @@ class _AdminVerificacionIdentidadClienteState
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: AdminUsuariosListaService.streamLista(
-                modo: 'clientes',
+                modo: 'todos',
                 campoOrden: 'updatedAt',
                 limite: AdminUsuariosListaService.limiteInicial,
               ),
@@ -252,8 +388,16 @@ class _AdminVerificacionIdentidadClienteState
                 final docs = (snap.data?.docs ?? const [])
                     .where((d) {
                       final m = d.data();
+                      if (!ClienteVerificacionIdentidadService
+                          .esCuentaPasajeroParaSelfie(m)) {
+                        return false;
+                      }
                       final estado =
                           ClienteVerificacionIdentidadService.estadoDesde(m);
+                      if (estado ==
+                          ClienteVerificacionIdentidadEstado.noAplica) {
+                        return false;
+                      }
                       return _pasaFiltro(estado) && _pasaBusqueda(m, d.id);
                     })
                     .toList(growable: false);

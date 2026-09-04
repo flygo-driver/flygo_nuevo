@@ -28,8 +28,6 @@ import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/widgets/viaje_overlay_error_shield.dart';
 import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
-import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
-import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/gps_service.dart';
 import 'package:flygo_nuevo/servicios/error_reporting.dart';
@@ -38,12 +36,13 @@ import 'package:flygo_nuevo/navegacion/post_viaje_taxista_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navegacion_externa_launcher.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/utils/viaje_navegacion_resolver.dart';
+import 'package:flygo_nuevo/widgets/multiparada_navegacion_tarjetas.dart';
 import 'package:flygo_nuevo/servicios/corporativo_fase_a_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart'; // 🔥 ESTA LÍNEA
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/corporativo_espera_codigo_constants.dart';
-import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/widgets/tarjeta_pago_estado_viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
@@ -130,16 +129,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   /// Pruebas en silla: solo debug/profile con define; nunca en Play Store.
   bool get _flygoSimCasa => ReleaseBuildFlags.simCasaEnabled;
 
-  /// Pruebas en casa / Bola Ahorro: abrir Maps y finalizar sin recorrer distancia real.
-  bool _permitePruebaSinRecorrido(Viaje v) =>
-      _flygoSimCasa || v.tipoServicio == 'bola_ahorro';
+  /// Pruebas en casa: abrir Maps y finalizar sin recorrer distancia real.
+  bool _permitePruebaSinRecorrido(Viaje v) => _flygoSimCasa;
 
   /// Atajo QA corporativo (solo debug / SIM CASA): mapa → código sin km reales.
   bool _permiteAtajoPruebaCorp(Viaje v) =>
       _permitePruebaSinRecorrido(v) &&
       CorporativoPasajerosChoferCard.esViajeCorporativo(v);
 
-  /// Copy del sheet: Bola solo en viajes bola; SIM CASA en debug sin mezclar productos.
+  /// Copy del sheet: SIM CASA en debug sin mezclar productos.
   String _hintPruebaSinRecorrido(
     Viaje v, {
     required bool trasIniciarRuta,
@@ -151,21 +149,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           : 'Prueba corporativo: abrí Waze/Maps y al volver aparece el código. '
               'Si manejás, el GPS graba la ruta igual.';
     }
-    if (v.tipoServicio == 'bola_ahorro') {
-      return trasIniciarRuta
-          ? 'Bola Ahorro: no hace falta recorrer km. '
-              'Tras iniciar ruta podés finalizar directo.'
-          : 'Bola Ahorro: abrí mapa o continuá sin mapa; '
-              'luego aparece «Finalizar viaje».';
-    }
     return trasIniciarRuta
         ? 'Modo prueba (SIM CASA): no hace falta recorrer km. '
-            'Tras iniciar ruta podés finalizar directo.'
+            'Tras iniciar ruta podés finalizar sin recorrer.'
         : 'Modo prueba (SIM CASA): abrí mapa o continuá sin mapa; '
             'luego aparece «Finalizar viaje».';
   }
 
-  /// GPS en vivo para el doc del viaje; abrir Waze/Maps no lo exige en prueba/Bola.
+  /// GPS en vivo para el doc del viaje; abrir Waze/Maps no lo exige en prueba.
   Future<bool> _gpsListoParaAbrirNavegacionExterna(Viaje v) async {
     if (_permitePruebaSinRecorrido(v) || kIsWeb) return true;
     return _asegurarGps(v.id);
@@ -199,8 +190,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   // ===== Remoción / cancelación remota =====
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _cancelSub;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _bolaCancelSub;
-  String? _bolaCancelWatchViajeId;
   bool _procesandoRemocion = false;
   DateTime? _cancelListenerIniciadoEn;
 
@@ -235,8 +224,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   bool _clienteCerca = false;
   bool _navegacionIniciada = false;
   bool _navegacionDestinoIniciada = false;
-  /// Índice de leg multiparada para el que ya se abrió Waze/Maps (antes de «Llegué»).
-  int? _multiLegNavAbiertaIdx;
+  /// Legs multiparada con Waze/Maps abiertos en sesión (orden libre, estilo corp.).
+  final Set<int> _multiLegNavAbiertaIndices = <int>{};
+  bool _origenMultiNavAbierto = false;
   bool _selectorNavegacionAbierto = false;
   /// Evita ver la tarjeta del viaje y el modal Waze/Maps apilados a la vez.
   bool _viajeSheetOcultoPorModalNav = false;
@@ -282,6 +272,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   /// Multiparada: cuántos destinos (paradas + final) ya confirmó el taxista.
   int _multiLegCompletadas = 0;
   String? _multiNavViajeId;
+  /// Evita disparar factura automática dos veces para el mismo viaje.
+  String? _multiparadaAutoFacturaViajeId;
 
   /// Un solo ticker para "tiempo en ruta" (evita recrear Stream.periodic en cada rebuild).
   late final Stream<DateTime> _duracionEnRutaTicker =
@@ -642,8 +634,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (v.multiparadaCompleta) return true;
     final int total = _legsNavegacionMultiparada(v).length;
     if (total <= 0) return true;
-    return v.multiparadaLegCompletadas >= total ||
-        _multiLegCompletadas >= total;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    return visitados.length >= total || _multiLegCompletadas >= total;
   }
 
   void _aplicarProgresoMultiparadaDesdeViaje(Viaje v) {
@@ -656,14 +649,71 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
     final int total = _legsNavegacionMultiparada(v).length;
     final int fromServer = v.multiparadaLegCompletadas.clamp(0, total);
-    if (_multiNavViajeId != v.id || _multiLegCompletadas != fromServer) {
-      _multiLegCompletadas = fromServer;
+    if (_multiNavViajeId != v.id) {
+      _multiLegNavAbiertaIndices.clear();
+      _origenMultiNavAbierto = false;
       _multiNavViajeId = v.id;
+      _multiLegCompletadas = fromServer;
+    } else if (_multiLegCompletadas != fromServer) {
+      _multiLegCompletadas = fromServer;
+    }
+    final abiertos =
+        multiparadaLegsAbiertosDesdeViaje(v, totalLegs: total);
+    _multiLegNavAbiertaIndices.addAll(abiertos);
+    if (multiparadaRecogidaAbiertaDesdeViaje(v)) {
+      _origenMultiNavAbierto = true;
     }
   }
 
   bool _puedeFinalizarViajeMultiparada(Viaje v) =>
       !_esMultiparada(v) || _multiparadaRutaCompleta(v);
+
+  void _liberarGuardAutoFacturaMultiparada(String viajeId) {
+    if (_multiparadaAutoFacturaViajeId == viajeId) {
+      _multiparadaAutoFacturaViajeId = null;
+    }
+  }
+
+  /// Tras confirmar el último destino: abre factura/comisión sin diálogo extra.
+  void _programarAutoFacturaMultiparadaSiCorresponde(Viaje v) {
+    if (!mounted) return;
+    if (!_esMultiparada(v) || v.completado) return;
+    if (!_multiparadaRutaCompleta(v)) return;
+    if (_multiparadaAutoFacturaViajeId == v.id) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final Viaje? actual =
+          _cachedViaje?.id == v.id ? _cachedViaje : v;
+      if (actual == null || actual.completado) return;
+      if (!_multiparadaRutaCompleta(actual)) return;
+      if (_multiparadaAutoFacturaViajeId == actual.id) return;
+      unawaited(
+        _finalizarViaje(
+          actual,
+          trasConfirmarUltimaParadaMultiparada: true,
+        ),
+      );
+    });
+  }
+
+  /// Al volver de Waze/Maps: confirma con ✓ el leg pendiente que ya se abrió.
+  Future<void> _autoConfirmarLegMultiparadaPendienteTrasResume(Viaje v) async {
+    if (_actionBusy || !_esMultiparada(v) || v.completado) return;
+    final int total = _legsNavegacionMultiparada(v).length;
+    if (total <= 0) return;
+    final Set<int> visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    final Set<int> abiertos =
+        multiparadaLegsAbiertosDesdeViaje(v, totalLegs: total);
+    for (var i = 0; i < total; i++) {
+      if (visitados.contains(i)) continue;
+      final bool navAbierta =
+          abiertos.contains(i) || _multiLegNavAbiertaIndices.contains(i);
+      if (!navAbierta) return;
+      await _confirmarLegMultiparadaTaxista(v, i);
+      return;
+    }
+  }
 
   bool _esViajeCorporativo(Viaje v) =>
       CorporativoPasajerosChoferCard.esViajeCorporativo(v);
@@ -835,6 +885,58 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     return true;
   }
 
+  /// Panel de paradas visible (chofer ya validó PIN o corp. post-PIN).
+  bool _multiparadaPanelVisible(Viaje v, String estadoBase) {
+    if (!_esMultiparada(v) || _multiparadaRutaCompleta(v)) return false;
+    if (_corpDebeMostrarPanelPin(v, estadoBase)) return false;
+    if (_corpEnFasePickup(v, estadoBase)) return false;
+    if (_esViajeCorporativo(v)) {
+      return _corpMultiparadaHabilitada(v, estadoBase);
+    }
+    return v.codigoVerificado &&
+        (EstadosViaje.esAbordo(estadoBase) ||
+            EstadosViaje.esEnCurso(estadoBase));
+  }
+
+  /// Tarjetas interactivas (Waze/Maps + ✓).
+  bool _multiparadaNavegacionInteractiva(Viaje v, String estadoBase) {
+    if (!_multiparadaPanelVisible(v, estadoBase)) return false;
+    if (_esViajeCorporativo(v)) {
+      return _corpMultiparadaHabilitada(v, estadoBase);
+    }
+    return true;
+  }
+
+  /// Primera parada pendiente (orden libre) para banner y navegación rápida.
+  ({double lat, double lon, String label, bool esFinal, int index})?
+      _proximoLegMultiparadaPendiente(Viaje v) {
+    final List<({double lat, double lon, String label, bool esFinal})> legs =
+        _legsNavegacionMultiparada(v);
+    if (legs.isEmpty) return null;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: legs.length);
+    for (var i = 0; i < legs.length; i++) {
+      if (visitados.contains(i)) continue;
+      final leg = legs[i];
+      if (!_coordsValid(leg.lat, leg.lon)) continue;
+      return (
+        lat: leg.lat,
+        lon: leg.lon,
+        label: leg.label,
+        esFinal: leg.esFinal,
+        index: i,
+      );
+    }
+    return null;
+  }
+
+  void _snackMultiparadaConfirmarBloqueado() {
+    _tripFlowSnack(
+      'Primero tocá la parada y abrí Waze o Maps. Después confirmá con ✓.',
+      backgroundColor: Colors.orange,
+    );
+  }
+
   /// Corporativo: finalizar solo con código OK, navegación al destino y paradas hechas.
   bool _corpFinalizarHabilitado(Viaje v) {
     if (!_corpRutaOperativa(v)) return false;
@@ -937,8 +1039,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   Future<bool> _navegarDestinoMultiparadaActual(Viaje v) async {
-    final leg = _destinoMultiActual(v);
-    if (leg == null) {
+    final pendiente = _proximoLegMultiparadaPendiente(v);
+    if (pendiente == null) {
       if (mounted) {
         _tripFlowSnack(
           'No hay parada con coordenadas para navegar. '
@@ -949,22 +1051,189 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return false;
     }
     final int total = _legsNavegacionMultiparada(v).length;
-    final int paso = _multiLegCompletadas + 1;
-    final String tipo = leg.esFinal ? 'destino final' : 'parada $paso';
-    final int legIdx = _multiLegCompletadas;
-    final opened = await _selectorNavegacionDestino(
-      leg.lat,
-      leg.lon,
-      titulo: leg.esFinal ? 'Navegar al destino final' : 'Navegar a la parada',
-      addressLine: '${leg.label}\n($paso de $total · $tipo)',
-      footerHint:
-          'Waze o Maps abren este punto exacto (lat/lon). Al salir, confirma «Llegué — siguiente destino».',
-      viajeParaPersistirDestino: v,
+    await _navegarPuntoMultiparadaTaxista(
+      v,
+      legIndex: pendiente.index,
+      lat: pendiente.lat,
+      lon: pendiente.lon,
+      label: pendiente.label,
+      tituloSheet: pendiente.esFinal
+          ? 'Navegar al destino final'
+          : 'Navegar a la parada',
+      pasoEnTotal: pendiente.index + 1,
+      tipoLeg: pendiente.esFinal
+          ? 'destino final'
+          : 'parada ${pendiente.index + 1}',
     );
-    if (opened && mounted) {
-      setState(() => _multiLegNavAbiertaIdx = legIdx);
+    return _multiLegNavAbiertaIndices.contains(pendiente.index) ||
+        multiparadaLegsAbiertosDesdeViaje(v, totalLegs: total)
+            .contains(pendiente.index);
+  }
+
+  Future<void> _navegarPuntoMultiparadaTaxista(
+    Viaje v, {
+    required int? legIndex,
+    required double lat,
+    required double lon,
+    required String label,
+    required String tituloSheet,
+    required int pasoEnTotal,
+    required String tipoLeg,
+  }) async {
+    if (_actionBusy || _selectorNavegacionAbierto) return;
+    _actionBusy = true;
+    try {
+      if (_esViajeCorporativo(v)) {
+        final okGps = await _gpsListoParaAbrirNavegacionExterna(v);
+        if (!okGps) {
+          if (mounted) {
+            _tripFlowSnack(
+              'Activa el GPS para abrir Waze o Maps.',
+              backgroundColor: Colors.orange,
+            );
+          }
+          return;
+        }
+      }
+      final opened = await _selectorNavegacionDestino(
+        lat,
+        lon,
+        titulo: tituloSheet,
+        addressLine: pasoEnTotal > 0
+            ? '$label\n($pasoEnTotal · $tipoLeg)'
+            : label,
+        footerHint:
+            'Waze o Maps abren este punto exacto. Marcá ✓ al llegar (orden libre).',
+        viajeParaPersistirDestino: v,
+      );
+      if (opened && mounted) {
+        if (legIndex != null) {
+          _marcarNavegacionDestinoLista(v);
+        }
+        setState(() {
+          if (legIndex == null) {
+            _origenMultiNavAbierto = true;
+          } else {
+            _multiLegNavAbiertaIndices.add(legIndex);
+          }
+        });
+        try {
+          await ViajesRepo.marcarMultiparadaNavAbierta(
+            viajeId: v.id,
+            legIndex: legIndex,
+          );
+        } catch (e) {
+          if (mounted) {
+            _tripFlowSnack(
+              'No se pudo registrar la navegación: $e',
+              backgroundColor: Colors.orange,
+            );
+          }
+        }
+      }
+    } finally {
+      if (mounted) _actionBusy = false;
     }
-    return opened;
+  }
+
+  List<MultiparadaNavegacionTarjetaModel> _tarjetasNavegacionMultiparadaTaxista(
+    Viaje v, {
+    required bool habilitado,
+  }) {
+    final List<({double lat, double lon, String label, bool esFinal})> legs =
+        _legsNavegacionMultiparada(v);
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: legs.length);
+    final abiertos =
+        multiparadaLegsAbiertosDesdeViaje(v, totalLegs: legs.length);
+    final tarjetas = <MultiparadaNavegacionTarjetaModel>[];
+
+    final origen = ViajeNavegacionResolver.origen(v);
+    if (origen != null &&
+        ViajeNavegacionResolver.coordsValidas(origen.lat, origen.lon)) {
+      final bool recogidaAbierta = multiparadaRecogidaAbiertaDesdeViaje(v) ||
+          _origenMultiNavAbierto;
+      tarjetas.add(
+        MultiparadaNavegacionTarjetaModel(
+          titulo: 'Recogida',
+          subtitulo: origen.label,
+          accion: recogidaAbierta
+              ? 'Abierto en Waze/Maps'
+              : 'Waze o Maps · Recogida',
+          acento: const Color(0xFF0F766E),
+          icono: Icons.flag_circle_rounded,
+          navegadoEnSesion: recogidaAbierta,
+          onTap: habilitado && !_actionBusy && !_selectorNavegacionAbierto
+              ? () => unawaited(
+                    _navegarPuntoMultiparadaTaxista(
+                      v,
+                      legIndex: null,
+                      lat: origen.lat,
+                      lon: origen.lon,
+                      label: origen.label,
+                      tituloSheet: 'Navegar a la recogida',
+                      pasoEnTotal: 0,
+                      tipoLeg: 'origen',
+                    ),
+                  )
+              : null,
+        ),
+      );
+    }
+
+    for (var i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      if (!_coordsValid(leg.lat, leg.lon)) continue;
+      final bool visitado = visitados.contains(i);
+      final bool navegado =
+          abiertos.contains(i) || _multiLegNavAbiertaIndices.contains(i);
+      final bool prueba = _permitePruebaSinRecorrido(v);
+      tarjetas.add(
+        MultiparadaNavegacionTarjetaModel(
+          titulo: leg.esFinal ? 'Destino final' : 'Parada ${i + 1}',
+          subtitulo: leg.label,
+          accion: visitado
+              ? 'Parada confirmada'
+              : navegado
+                  ? 'Paso 3: confirmá con ✓'
+                  : 'Paso 1: tocá para Waze o Maps',
+          acento: kMultiparadaNavegacionAcentos[
+              i % kMultiparadaNavegacionAcentos.length],
+          icono:
+              leg.esFinal ? Icons.flag_rounded : Icons.location_on_rounded,
+          legIndex: i,
+          visitado: visitado,
+          navegadoEnSesion: navegado,
+          confirmacionHabilitada: navegado || prueba,
+          onTap: habilitado &&
+                  !_actionBusy &&
+                  !_selectorNavegacionAbierto &&
+                  !visitado
+              ? () => unawaited(
+                    _navegarPuntoMultiparadaTaxista(
+                      v,
+                      legIndex: i,
+                      lat: leg.lat,
+                      lon: leg.lon,
+                      label: leg.label,
+                      tituloSheet: leg.esFinal
+                          ? 'Navegar al destino final'
+                          : 'Navegar a la parada',
+                      pasoEnTotal: i + 1,
+                      tipoLeg: leg.esFinal ? 'destino final' : 'parada ${i + 1}',
+                    ),
+                  )
+              : null,
+          onMarcarHecha: habilitado && !_actionBusy && !visitado
+              ? () => unawaited(_confirmarLegMultiparadaTaxista(v, i))
+              : null,
+          onConfirmarBloqueado: habilitado && !_actionBusy && !visitado
+              ? _snackMultiparadaConfirmarBloqueado
+              : null,
+        ),
+      );
+    }
+    return tarjetas;
   }
 
   ({double lat, double lon, String label})? _corpCoordsDestinoSimple(Viaje v) {
@@ -1063,12 +1332,28 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     );
   }
 
-  Future<void> _confirmarLlegadaDestinoMulti(Viaje v) async {
+  Future<void> _confirmarLegMultiparadaTaxista(Viaje v, int legIndex) async {
     if (_actionBusy) return;
     final int total = _legsNavegacionMultiparada(v).length;
-    if (_multiLegCompletadas >= total || v.multiparadaCompleta) return;
+    if (legIndex < 0 || legIndex >= total) return;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    if (visitados.contains(legIndex)) {
+      if (_multiparadaRutaCompleta(v) && !v.completado) {
+        _programarAutoFacturaMultiparadaSiCorresponde(v);
+      }
+      return;
+    }
+    if (v.multiparadaCompleta && !v.completado) {
+      _programarAutoFacturaMultiparadaSiCorresponde(v);
+      return;
+    }
+    if (v.multiparadaCompleta) return;
+    final abiertos =
+        multiparadaLegsAbiertosDesdeViaje(v, totalLegs: total);
     if (!_permitePruebaSinRecorrido(v) &&
-        _multiLegNavAbiertaIdx != _multiLegCompletadas) {
+        !abiertos.contains(legIndex) &&
+        !_multiLegNavAbiertaIndices.contains(legIndex)) {
       _tripFlowSnack(
         'Abrí Waze o Maps a esta parada antes de confirmar la llegada.',
         backgroundColor: Colors.orange,
@@ -1076,85 +1361,104 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
     _actionBusy = true;
+    Viaje? viajeTrasCierreMultiparada;
     try {
+      if (_permitePruebaSinRecorrido(v) &&
+          !abiertos.contains(legIndex) &&
+          !_multiLegNavAbiertaIndices.contains(legIndex)) {
+        await ViajesRepo.marcarMultiparadaNavAbierta(
+          viajeId: v.id,
+          legIndex: legIndex,
+        );
+      }
       Viaje operativo = await _asegurarEnCursoParaMultiparada(v);
       if (!mounted) return;
-      if (mounted) {
-        setState(() {
-          _aplicarProgresoMultiparadaDesdeViaje(operativo);
-          _cachedViaje = operativo;
-        });
-      }
+      setState(() {
+        _aplicarProgresoMultiparadaDesdeViaje(operativo);
+        _cachedViaje = operativo;
+      });
       final int totalOperativo =
           _legsNavegacionMultiparada(operativo).length;
-      if (_multiLegCompletadas >= totalOperativo ||
-          operativo.multiparadaCompleta) {
-        return;
-      }
-      final (double, double)? ping = _taxistaPosCola.value;
-      await ViajesRepo.registrarLegMultiparadaCompletada(
-        viajeId: operativo.id,
-        latConfirmacion: ping?.$1,
-        lonConfirmacion: ping?.$2,
-      );
-      if (_esViajeCorporativo(operativo)) {
-        await _corpGpsCheckpoint(
-          operativo,
-          'parada',
-          lat: ping?.$1,
-          lon: ping?.$2,
+      Viaje actualizado = operativo;
+      if (!operativo.multiparadaCompleta) {
+        final (double, double)? ping = _taxistaPosCola.value;
+        await ViajesRepo.registrarLegMultiparadaCompletada(
+          viajeId: operativo.id,
+          legIndex: legIndex,
+          latConfirmacion: ping?.$1,
+          lonConfirmacion: ping?.$2,
         );
-        _marcarNavegacionDestinoLista(operativo);
-      }
-      if (!mounted) return;
-      final snap = await FirebaseFirestore.instance
-          .collection('viajes')
-          .doc(operativo.id)
-          .get();
-      if (!mounted) return;
-      final data = snap.data();
-      if (data != null) {
-        final Viaje actualizado = Viaje.fromMap(operativo.id, data);
-        setState(() {
-          _aplicarProgresoMultiparadaDesdeViaje(actualizado);
-          _cachedViaje = actualizado;
-          _multiLegNavAbiertaIdx = null;
-        });
-        _sincronizarReferenciaOrdenCola(actualizado);
-        _recalcDistanciaDestino();
-        _scheduleDrawRoute();
-        final int next = _multiLegCompletadas;
-        if (next >= total) {
-          _tripFlowSnack(
-            'Ruta multiparada completada. Podés finalizar el viaje.',
-            backgroundColor: Colors.greenAccent,
+        if (_esViajeCorporativo(operativo)) {
+          await _corpGpsCheckpoint(
+            operativo,
+            'parada',
+            lat: ping?.$1,
+            lon: ping?.$2,
           );
-        } else {
-          final leg = _destinoMultiActual(actualizado);
-          if (leg == null) {
-            _tripFlowSnack(
-              'Parada registrada.',
-              backgroundColor: Colors.lightBlueAccent,
-            );
-          } else {
-            _tripFlowSnack(
-              'Siguiente destino: ${leg.label}',
-              backgroundColor: Colors.lightBlueAccent,
-            );
-            if (mounted) {
-              await _abrirMapsLegMultiparada(leg.lat, leg.lon, leg.label);
-            }
-          }
+          _marcarNavegacionDestinoLista(operativo);
         }
+        if (!mounted) return;
+        final snap = await FirebaseFirestore.instance
+            .collection('viajes')
+            .doc(operativo.id)
+            .get();
+        if (!mounted) return;
+        final data = snap.data();
+        if (data == null) return;
+        actualizado = Viaje.fromMap(operativo.id, data);
+      }
+      setState(() {
+        _aplicarProgresoMultiparadaDesdeViaje(actualizado);
+        _cachedViaje = actualizado;
+        _multiLegNavAbiertaIndices.remove(legIndex);
+      });
+      _sincronizarReferenciaOrdenCola(actualizado);
+      _recalcDistanciaDestino();
+      _scheduleDrawRoute();
+      final int visitadosCount = multiparadaLegsVisitadosDesdeViaje(
+        actualizado,
+        totalLegs: totalOperativo,
+      ).length;
+      final bool rutaCompleta = visitadosCount >= totalOperativo ||
+          actualizado.multiparadaCompleta ||
+          _multiparadaRutaCompleta(actualizado);
+      if (rutaCompleta) {
+        viajeTrasCierreMultiparada = actualizado;
+        _tripFlowSnack(
+          'Todos los destinos confirmados. Abriendo factura…',
+          backgroundColor: Colors.greenAccent,
+        );
+      } else {
+        _tripFlowSnack(
+          'Parada confirmada (${visitadosCount}/$totalOperativo).',
+          backgroundColor: Colors.lightBlueAccent,
+        );
       }
     } catch (e) {
-      if (!mounted) return;
-      _tripFlowSnack(
-        e.toString().replaceFirst('Exception: ', ''),
-        backgroundColor: Colors.redAccent,
-      );
+      if (mounted) {
+        _tripFlowSnack(
+          'No se pudo registrar la parada: $e',
+          backgroundColor: Colors.redAccent,
+        );
+      }
     } finally {
       if (mounted) _actionBusy = false;
+    }
+    final Viaje? cerrar = viajeTrasCierreMultiparada;
+    if (cerrar != null && mounted) {
+      _programarAutoFacturaMultiparadaSiCorresponde(cerrar);
+    }
+  }
+
+  Future<void> _confirmarLlegadaDestinoMulti(Viaje v) async {
+    final int total = _legsNavegacionMultiparada(v).length;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    for (var i = 0; i < total; i++) {
+      if (!visitados.contains(i)) {
+        await _confirmarLegMultiparadaTaxista(v, i);
+        return;
+      }
     }
   }
 
@@ -1162,8 +1466,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     final List<({double lat, double lon, String label, bool esFinal})> legs =
         _legsNavegacionMultiparada(v);
     if (legs.isEmpty) return;
-    final int from = _multiLegCompletadas.clamp(0, legs.length);
-    if (from >= legs.length) return;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: legs.length);
+    final List<({double lat, double lon, String label, bool esFinal})>
+        remaining = <({double lat, double lon, String label, bool esFinal})>[];
+    for (var i = 0; i < legs.length; i++) {
+      if (!visitados.contains(i)) remaining.add(legs[i]);
+    }
+    if (remaining.isEmpty) return;
 
     double oLat = v.latCliente;
     double oLon = v.lonCliente;
@@ -1182,9 +1492,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
 
-    final List<({double lat, double lon, String label, bool esFinal})> remaining =
-        legs.sublist(from.clamp(0, legs.length));
-    if (remaining.isEmpty) return;
     final double dLat = remaining.last.lat;
     final double dLon = remaining.last.lon;
     final List<({double lat, double lon})> paradas =
@@ -1224,161 +1531,53 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     if (legs.isEmpty) return const <Widget>[];
 
     final int total = legs.length;
-    final int hechos = _multiLegCompletadas.clamp(0, total);
-    final bool completa = hechos >= total;
-    final leg = _destinoMultiActual(v);
-    final bool puedeConfirmarLeg = _permitePruebaSinRecorrido(v) ||
-        _multiLegNavAbiertaIdx == hechos;
+    final visitados =
+        multiparadaLegsVisitadosDesdeViaje(v, totalLegs: total);
+    final int hechos = visitados.length.clamp(0, total);
+    final bool completa = hechos >= total || v.multiparadaCompleta;
 
     return <Widget>[
-      Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.orange.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.45)),
+      MultiparadaNavegacionTarjetasPanel(
+        tituloProgreso: completa
+            ? 'Multiparada: todos los destinos visitados ($hechos/$total)'
+            : 'Multiparada: $hechos de $total confirmados',
+        subtituloHint: completa
+            ? 'Factura y comisión al confirmar el último destino con ✓.'
+            : 'Podés ir en el orden que quieras. Cada parada: navegá y confirmá con ✓.',
+        tarjetas: _tarjetasNavegacionMultiparadaTaxista(
+          v,
+          habilitado: habilitado,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              completa
-                  ? 'Multiparada: todos los destinos visitados ($total/$total)'
-                  : 'Multiparada: destino ${hechos + 1} de $total',
-              style: const TextStyle(
-                color: Colors.orangeAccent,
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 6),
-            for (var i = 0; i < legs.length; i++)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Icon(
-                      i < hechos
-                          ? Icons.check_circle
-                          : (i == hechos && !completa
-                              ? Icons.radio_button_checked
-                              : Icons.circle_outlined),
-                      size: 18,
-                      color: i < hechos
-                          ? Colors.greenAccent
-                          : (i == hechos && !completa
-                              ? Colors.orangeAccent
-                              : Colors.white38),
+        accionesInferiores: completa
+            ? const <Widget>[]
+            : <Widget>[
+                ElevatedButton.icon(
+                  onPressed: habilitado
+                      ? () => unawaited(_abrirGoogleMapsRutaMultiRestante(v))
+                      : null,
+                  icon: const Icon(Icons.alt_route, size: 24),
+                  label: const Text(
+                    'Ver ruta completa restante (Google Maps)',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1565C0),
+                    foregroundColor: Colors.white,
+                    elevation: 3,
+                    minimumSize: const Size(double.infinity, 54),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${i + 1}. ${legs[i].label}${legs[i].esFinal ? ' (final)' : ''}',
-                        style: TextStyle(
-                          color: i == hechos && !completa
-                              ? Colors.white
-                              : Colors.white70,
-                          fontSize: 13,
-                          fontWeight: i == hechos && !completa
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-          ],
-        ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Encadena paradas pendientes en un solo mapa.',
+                  style: TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ],
       ),
-      const SizedBox(height: 12),
-      if (!completa && leg != null) ...<Widget>[
-        _btnPrimario(
-          icon: const Icon(Icons.navigation, size: 24),
-          label: Text(
-            leg.esFinal
-                ? 'NAVEGAR AL DESTINO FINAL'
-                : 'NAVEGAR A PARADA ${hechos + 1}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-          ),
-          onPressed: (!habilitado || _actionBusy || _selectorNavegacionAbierto)
-              ? null
-              : () async {
-                  if (_actionBusy || _selectorNavegacionAbierto) return;
-                  _actionBusy = true;
-                  try {
-                    if (_esViajeCorporativo(v)) {
-                      await _corpAbrirNavegacionDestinoActual(v);
-                    } else {
-                      await _navegarDestinoMultiparadaActual(v);
-                    }
-                  } finally {
-                    if (mounted) _actionBusy = false;
-                  }
-                },
-        ),
-        const SizedBox(height: 10),
-        Text(
-          leg.label,
-          style: const TextStyle(color: Colors.white70, fontSize: 14),
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 12),
-        _btnPrimario(
-          icon: const Icon(Icons.check_circle_outline, size: 24),
-          label: Text(
-            leg.esFinal
-                ? 'LLEGUÉ EN PARADA ${hechos + 1} DE $total · FINAL'
-                : 'LLEGUÉ EN PARADA ${hechos + 1} DE $total',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-          ),
-          backgroundColor: Colors.deepOrange,
-          onPressed: (!habilitado || _actionBusy || !puedeConfirmarLeg)
-              ? null
-              : () => unawaited(_confirmarLlegadaDestinoMulti(v)),
-        ),
-        if (!puedeConfirmarLeg && !_permitePruebaSinRecorrido(v)) ...[
-          const SizedBox(height: 8),
-          Text(
-            'Abrí Waze o Maps a esta parada para habilitar «Llegué».',
-            style: TextStyle(
-              color: Colors.orangeAccent.withValues(alpha: 0.95),
-              fontSize: 12.5,
-              height: 1.35,
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-        ElevatedButton.icon(
-          onPressed: habilitado
-              ? () => unawaited(_abrirGoogleMapsRutaMultiRestante(v))
-              : null,
-          icon: const Icon(Icons.alt_route, size: 24),
-          label: const Text(
-            'VER RUTA COMPLETA RESTANTE (GOOGLE MAPS)',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-          ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF1565C0),
-            foregroundColor: Colors.white,
-            elevation: 3,
-            minimumSize: const Size(double.infinity, 54),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Muestra todas las paradas encadenadas en un solo mapa.',
-          style: TextStyle(color: Colors.white60, fontSize: 12),
-        ),
-      ],
     ];
   }
 
@@ -1643,6 +1842,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         _cargaViajeExpirada = false;
         _corporativoAunNoHoraMsg = null;
       });
+      ActiveTripService.registrarViajeOperativoTaxista(vs.id);
       _syncEsperaCargaViaje(false);
     } catch (e) {
       debugPrint('[VIAJE_ACTIVO] sembrar viaje activo: $e');
@@ -1681,6 +1881,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           lonTaxista: _cachedViaje?.lonTaxista ?? fresh.lonTaxista,
         );
       });
+      _aplicarProgresoMultiparadaDesdeViaje(fresh);
+      _programarAutoFacturaMultiparadaSiCorresponde(fresh);
       _recalcDistanciaDestino();
       print(
           '[VIAJE_ACTIVO] resume refresh OK estado=${fresh.estado} completado=${fresh.completado}');
@@ -2839,6 +3041,31 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       return;
     }
 
+    // Multiparada: cada parada abre Waze por separado (no marca _navegacionDestinoIniciada).
+    if (_esMultiparada(v) &&
+        !v.completado &&
+        EstadosViaje.esEnCurso(estadoBase)) {
+      await _autoConfirmarLegMultiparadaPendienteTrasResume(v);
+      if (!mounted) return;
+      final Viaje? trasConfirm = _cachedViaje ?? v;
+      if (trasConfirm != null &&
+          _multiparadaRutaCompleta(trasConfirm) &&
+          !trasConfirm.completado) {
+        _programarAutoFacturaMultiparadaSiCorresponde(trasConfirm);
+        return;
+      }
+      final int totalMulti = _legsNavegacionMultiparada(v).length;
+      final bool hayNavMulti = _multiLegNavAbiertaIndices.isNotEmpty ||
+          multiparadaLegsAbiertosDesdeViaje(v, totalLegs: totalMulti).isNotEmpty;
+      if (hayNavMulti) {
+        _tripFlowSnack(
+          'Volviste a RAI Driver. Confirmá la parada con ✓ para seguir.',
+          backgroundColor: const Color(0xFF2E7D32),
+        );
+        return;
+      }
+    }
+
     if (!_navegacionDestinoIniciada && _permitePruebaSinRecorrido(v)) {
       _tripFlowSnack(
         'Volviste a RAI Driver. Abrí «Navegar al destino» o tocá «Continuar sin mapa».',
@@ -2870,9 +3097,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ActiveTripService.markTaxistaTripScreenMounted();
     unawaited(_ubicacionTaxistaSvc.ensureStarted());
     _ubicacionTaxistaSvc.modo.addListener(_onUbicacionTaxistaModoChanged);
-    unawaited(BolaPuebloRepo.reconciliarSesionBolaAtascada());
     _initViajeEnCursoStream();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -2944,26 +3171,53 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
   }
 
   Widget _viajeSheetHandle() {
-    return Column(
-      children: [
-        const SizedBox(height: 6),
-        Center(
-          child: Container(
-            width: 72,
-            height: 32,
-            alignment: Alignment.center,
+    return _wrapTaxistaSheetHandleDrag(
+      child: Column(
+        children: [
+          const SizedBox(height: 6),
+          Center(
             child: Container(
-              width: 44,
-              height: 5,
-              decoration: BoxDecoration(
-                color: RaiDsColors.border,
-                borderRadius: BorderRadius.circular(3),
+              width: 72,
+              height: 36,
+              alignment: Alignment.center,
+              child: Container(
+                width: 48,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: RaiDsColors.border,
+                  borderRadius: BorderRadius.circular(3),
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 6),
-      ],
+          const SizedBox(height: 4),
+          Text(
+            'Desliza hacia arriba o abajo',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.42),
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+      ),
+    );
+  }
+
+  Widget _wrapTaxistaSheetHandleDrag({required Widget child}) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragUpdate: (DragUpdateDetails details) {
+        if (!_viajeSheetCtrl.isAttached) return;
+        final double h = MediaQuery.sizeOf(context).height;
+        if (h <= 0) return;
+        final double next = (_viajeSheetCtrl.size - details.delta.dy / h)
+            .clamp(_kViajeSheetMin, 1.0);
+        _viajeSheetCtrl.jumpTo(next);
+      },
+      child: child,
     );
   }
 
@@ -2998,6 +3252,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     return DraggableScrollableSheet(
       key: ValueKey<String>('viaje-sheet-${viaje.id}'),
       controller: _viajeSheetCtrl,
+      expand: true,
       minChildSize: _kViajeSheetMin,
       maxChildSize: 1.0,
       initialChildSize: sheetInitial,
@@ -3238,6 +3493,11 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       print('[VIAJE_ACTIVO] taxista lifecycle resumed');
+      ActiveTripService.bloquearShellTaxistaTrasAceptar(
+        const Duration(minutes: 30),
+        viajeId: _cachedViaje?.id,
+      );
+      ActiveTripService.notificarRebuildShell();
       // resumed: GPS se reanuda con _asegurarGps(..., allowPermissionDialog:false) → readNoRequest, sin diálogo del SO.
       unawaited(() async {
         await _refrescarViajeDocDesdeFirestore();
@@ -3823,8 +4083,8 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     _cargaViajeSegundosN.dispose();
     _ubicacionTaxistaSvc.modo.removeListener(_onUbicacionTaxistaModoChanged);
     WidgetsBinding.instance.removeObserver(this);
+    ActiveTripService.markTaxistaTripScreenUnmounted();
     _cancelSub?.cancel();
-    _bolaCancelSub?.cancel();
     _viajeSheetCtrl.dispose();
     _map?.dispose();
     _gpsStreamRecoveryTimer?.cancel();
@@ -4439,9 +4699,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
       final data = viajeSnap.data();
       if (data != null) {
-        if ((data['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro') {
-          unawaited(BolaPuebloFirestoreSync.syncBolaEnCursoDesdeViaje(viajeId));
-        }
         final viajeActualizado = Viaje.fromMap(viajeId, data);
         _aplicarProgresoMultiparadaDesdeViaje(viajeActualizado);
         if (mounted) {
@@ -4473,21 +4730,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           if (mounted) _restablecerSheetTrasPinCorp();
         } else if (_esMultiparada(viajeActualizado)) {
           _tripFlowSnack(
-            'Código correcto. Ruta multiparada: seguí parada a parada.',
+            'Código correcto. Tocá cada parada abajo → Waze → ✓.',
             backgroundColor: Colors.green,
           );
-          final leg = _destinoMultiActual(viajeActualizado);
-          if (leg != null && mounted) {
-            _tripFlowSnack(
-              'Primera parada: ${leg.label}',
-              backgroundColor: Colors.blueGrey,
-            );
-            await _navegarDestinoMultiparadaActual(viajeActualizado);
-          } else if (mounted) {
-            _tripFlowSnack(
-              'Confirmá cada parada con «Llegué — siguiente destino».',
-              backgroundColor: Colors.orange,
-            );
+          if (mounted) {
+            _expandirViajeSheetTrasMapa();
+            _restablecerSheetTrasPinCorp();
           }
         } else {
           if (_permitePruebaSinRecorrido(viajeActualizado)) {
@@ -4520,8 +4768,27 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
   }
 
-  Future<void> _finalizarViaje(Viaje v) async {
-    if (_actionBusy) return;
+  Future<void> _finalizarViaje(
+    Viaje v, {
+    bool trasConfirmarUltimaParadaMultiparada = false,
+  }) async {
+    if (_actionBusy) {
+      if (trasConfirmarUltimaParadaMultiparada) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          unawaited(
+            _finalizarViaje(
+              v,
+              trasConfirmarUltimaParadaMultiparada: true,
+            ),
+          );
+        });
+      }
+      return;
+    }
+    if (trasConfirmarUltimaParadaMultiparada) {
+      _multiparadaAutoFacturaViajeId = v.id;
+    }
     _actionBusy = true;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -4560,6 +4827,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             duration: const Duration(seconds: 5),
           ),
         );
+      }
+      if (trasConfirmarUltimaParadaMultiparada) {
+        _liberarGuardAutoFacturaMultiparada(viajeOperativo.id);
       }
       _actionBusy = false;
       return;
@@ -4646,6 +4916,17 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         '[FLYGO_SIM_CASA] finalizar sin GPS/diálogo/medición viaje=${viajeOperativo.id} '
         'tipo=${viajeOperativo.tipoServicio} corp=${_esViajeCorporativo(viajeOperativo)}',
       );
+    } else if (trasConfirmarUltimaParadaMultiparada &&
+        _esMultiparada(viajeOperativo) &&
+        _multiparadaRutaCompleta(viajeOperativo)) {
+      // El chofer acaba de confirmar el destino final con ✓: factura/comisión al instante.
+      await _asegurarGps(viajeOperativo.id, allowPermissionDialog: false);
+      if (mounted) {
+        _tripFlowSnack(
+          'Destino final confirmado. Generando factura y comisión…',
+          backgroundColor: Colors.greenAccent,
+        );
+      }
     } else {
       // Intento de GPS en vivo sin abrir diálogo de permisos (permiso ya concedido).
       await _asegurarGps(viajeOperativo.id, allowPermissionDialog: false);
@@ -4720,12 +5001,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           );
         }
-        if (viajeOperativo.tipoServicio == 'bola_ahorro') {
-          if (kDebugMode) {
-            print('[BOLA_AHORRO] finalizar callable OK → sync bola viaje=${viajeOperativo.id}');
-          }
-          unawaited(BolaPuebloFirestoreSync.postCompletarViajeEspejo(viajeOperativo.id));
-        }
       } on FirebaseFunctionsException catch (e, st) {
         print(
             '[FINALIZAR_ERROR] FirebaseFunctionsException viajeId=${viajeOperativo.id} '
@@ -4741,6 +5016,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           );
         }
         ActiveTripService.cancelarMantenimientoOverlayViaje();
+        if (trasConfirmarUltimaParadaMultiparada) {
+          _liberarGuardAutoFacturaMultiparada(viajeOperativo.id);
+        }
         _actionBusy = false;
         return;
       } catch (e, st) {
@@ -4754,6 +5032,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
           );
         }
         ActiveTripService.cancelarMantenimientoOverlayViaje();
+        if (trasConfirmarUltimaParadaMultiparada) {
+          _liberarGuardAutoFacturaMultiparada(viajeOperativo.id);
+        }
         _actionBusy = false;
         return;
       }
@@ -4818,6 +5099,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     } catch (e, st) {
       print('[FINALIZAR] _finalizarViaje catch outer $e $st');
       ActiveTripService.cancelarMantenimientoOverlayViaje();
+      if (trasConfirmarUltimaParadaMultiparada) {
+        _liberarGuardAutoFacturaMultiparada(v.id);
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           messenger
@@ -5858,64 +6142,6 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
   }
 
-  void _disposeBolaCancelWatch() {
-    _bolaCancelSub?.cancel();
-    _bolaCancelSub = null;
-    _bolaCancelWatchViajeId = null;
-  }
-
-  Future<void> _watchBolaCancelEnViaje(String viajeId) async {
-    final String vid = viajeId.trim();
-    if (vid.isEmpty) {
-      _disposeBolaCancelWatch();
-      return;
-    }
-    if (_bolaCancelWatchViajeId == vid && _bolaCancelSub != null) return;
-
-    _disposeBolaCancelWatch();
-    _bolaCancelWatchViajeId = vid;
-
-    try {
-      final DocumentSnapshot<Map<String, dynamic>> vSnap =
-          await FirebaseFirestore.instance.collection('viajes').doc(vid).get();
-      if (!vSnap.exists) return;
-      final Map<String, dynamic> vd = vSnap.data() ?? <String, dynamic>{};
-      if (!ViajePoolTaxistaGate.esViajeEspejoBolaParaFlujo(vd)) return;
-
-      final String bolaId =
-          ViajePoolTaxistaGate.bolaPuebloIdDesdeViajeDoc(vd);
-      if (bolaId.isEmpty) return;
-
-      _bolaCancelSub = FirebaseFirestore.instance
-          .collection('bolas_pueblo')
-          .doc(bolaId)
-          .snapshots()
-          .listen((DocumentSnapshot<Map<String, dynamic>> snap) {
-        if (!mounted) return;
-        final Map<String, dynamic>? bolaData = snap.data();
-        if ((bolaData?['estado'] ?? '').toString().trim() != 'cancelada') {
-          return;
-        }
-        final String uid =
-            (FirebaseAuth.instance.currentUser?.uid ?? '').trim();
-        final String canceladaPor =
-            (bolaData?['canceladaPor'] ?? '').toString().trim();
-        if (canceladaPor.isNotEmpty && canceladaPor == uid) return;
-        final String msg = bolaData != null
-            ? BolaPuebloRepo.mensajeCancelacionParaParticipante(bolaData, uid)
-            : 'El acuerdo Bola Ahorro fue cancelado.';
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (!mounted) return;
-          _stopGps();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(msg), duration: const Duration(seconds: 4)),
-          );
-          await NavigationService.irAlInicioTaxista(context: context);
-        });
-      }, onError: (_) {});
-    } catch (_) {}
-  }
-
   void _escucharCancelacionRemota(String viajeId) {
     _cancelSub?.cancel();
     _cancelListenerIniciadoEn = DateTime.now();
@@ -6405,15 +6631,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   _clienteCerca = false;
                   _multiLegCompletadas = 0;
                   _multiNavViajeId = null;
+                  _multiparadaAutoFacturaViajeId = null;
                   _corpPinUiActivo = false;
                   _corpPinSheetExpandido = false;
                   final Viaje? prevCache = _cachedViaje;
                   _cachedViaje = viaje;
                   _notificarCambioPasajerosCorpSiCorresponde(prevCache, viaje);
                   _aplicarProgresoMultiparadaDesdeViaje(viaje);
+                  _programarAutoFacturaMultiparadaSiCorresponde(viaje);
                   _asegurarChatCorporativo(viaje);
                   _escucharCancelacionRemota(viaje.id);
-                  unawaited(_watchBolaCancelEnViaje(viaje.id));
                   unawaited(_syncCorpCodigoLive(viaje.id));
                   unawaited(_notificarEncadenadoSiCorresponde(viaje.id));
 
@@ -6432,6 +6659,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   _cachedViaje = viaje;
                   _notificarCambioPasajerosCorpSiCorresponde(prevCache, viaje);
                   _aplicarProgresoMultiparadaDesdeViaje(viaje);
+                  _programarAutoFacturaMultiparadaSiCorresponde(viaje);
                   _asegurarChatCorporativo(viaje);
                   unawaited(_syncCorpCodigoLive(viaje.id));
                   final String newSig = _firmaRutaMapaTaxista(viaje);
@@ -6975,10 +7203,9 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         multiCompleta
             ? 'Todas las paradas quedaron confirmadas. Tocá «Finalizar viaje».'
             : rutaIniciada && multi
-                ? 'Seguí con Maps/Waze o confirmá la parada actual abajo.'
+                ? 'Seguí las paradas abajo: Waze/Maps y confirmá con ✓.'
                 : multi
-                    ? 'El código del período quedó verificado. Abrí Maps o Waze arriba '
-                        'o tocá «Iniciar ruta» para la primera parada.'
+                    ? 'Tocá una parada abajo, abrí Waze o Maps y confirmá con ✓.'
                     : 'El código quedó verificado. Abrí Maps o Waze arriba o tocá «Iniciar ruta».',
         style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.35),
       ),
@@ -6994,7 +7221,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         if (!multiCompleta && !rutaIniciada) const SizedBox(height: 12),
         ..._bloqueNavegacionMultiparada(
           v,
-          habilitado: _corpMultiparadaHabilitada(v, estadoBase),
+          habilitado: _multiparadaNavegacionInteractiva(v, estadoBase),
         ),
       ],
       if (multiCompleta ||
@@ -7029,8 +7256,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
       ] else if (multi) ...[
         const SizedBox(height: 8),
         Text(
-          'Tras «Iniciar ruta», confirmá cada parada. '
-          'Finalizar se activa al completar todas.',
+          'Tras «Iniciar ruta», tocá cada parada → Waze → ✓.',
           style: TextStyle(
             color: Colors.orangeAccent.withValues(alpha: 0.95),
             fontSize: 12.5,
@@ -7657,10 +7883,12 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
               onPressed: () => unawaited(_corpIniciarRutaAlDestino(v)),
             ),
-          if (_esMultiparada(v) &&
-              _corpMultiparadaHabilitada(v, estadoBase)) ...[
+          if (_multiparadaPanelVisible(v, estadoBase)) ...[
             const SizedBox(height: 12),
-            ..._bloqueNavegacionMultiparada(v),
+            ..._bloqueNavegacionMultiparada(
+              v,
+              habilitado: _multiparadaNavegacionInteractiva(v, estadoBase),
+            ),
           ],
           if (!corpPin) ...[
             const SizedBox(height: 12),
@@ -7745,8 +7973,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           ] else if (corpPin) ...[
             Text(
-              'Tras «Iniciar ruta», confirmá cada parada. '
-              'Finalizar se activa al completar todas.',
+              'Tras «Iniciar ruta», tocá cada parada → Waze → ✓.',
               style: TextStyle(
                 color: Colors.orangeAccent.withValues(alpha: 0.95),
                 fontSize: 12.5,
@@ -7756,7 +7983,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
           ] else ...[
             Text(
-              'Viaje multiparada: confirmá cada parada con «Llegué — siguiente destino».',
+              'Ruta multiparada: tocá cada parada abajo → Waze → ✓.',
               style: TextStyle(
                 color: Colors.orangeAccent.withValues(alpha: 0.95),
                 fontSize: 12.5,
@@ -7943,11 +8170,15 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
     }
 
     if (EstadosViaje.esEnCurso(estadoBase)) {
-      final legMulti = _destinoMultiActual(v);
+      final pendiente = _proximoLegMultiparadaPendiente(v);
       final bool corpEnRuta = CorporativoPasajerosChoferCard.esViajeCorporativo(v);
-      final String destinoUi = _esMultiparada(v) && legMulti != null
-          ? legMulti.label
+      final String destinoUi = _esMultiparada(v) && pendiente != null
+          ? pendiente.label
           : v.destino;
+      final int totalMulti = _legsNavegacionMultiparada(v).length;
+      final int hechosMulti = _esMultiparada(v)
+          ? multiparadaLegsVisitadosDesdeViaje(v, totalLegs: totalMulti).length
+          : 0;
       return [
         if (!corpEnRuta)
           _estadoProfesionalCard(
@@ -7957,14 +8188,16 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
                 ? 'Paso actual: ruta multiparada'
                 : 'Paso actual: en ruta al destino',
             detalle: _esMultiparada(v)
-                ? 'Navega parada a parada. Al salir de Waze/Maps, toca «Llegué — siguiente destino».'
+                ? 'Tocá la parada → Waze o Maps → confirmá con ✓ ($hechosMulti/$totalMulti).'
                 : 'Siguiente acción esperada: al llegar, confirmar y finalizar el viaje.',
           ),
         if (!corpEnRuta) const SizedBox(height: 12),
         Text(
           corpEnRuta && _esMultiparada(v)
-              ? 'Parada actual'
-              : (_esMultiparada(v) ? 'Destino actual' : 'En camino al destino'),
+              ? 'Siguiente parada pendiente'
+              : (_esMultiparada(v)
+                  ? 'Siguiente parada pendiente'
+                  : 'En camino al destino'),
           style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
@@ -7995,8 +8228,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
         if (_esMultiparada(v))
           ..._bloqueNavegacionMultiparada(
             v,
-            habilitado: !_esViajeCorporativo(v) ||
-                _corpMultiparadaHabilitada(v, estadoBase),
+            habilitado: _multiparadaNavegacionInteractiva(v, estadoBase),
           ),
         if (!_esMultiparada(v) || _multiparadaRutaCompleta(v)) ...[
           if (!_navegacionDestinoIniciada &&
@@ -8120,14 +8352,14 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
             ),
             child: Text(
               _esViajeCorporativo(v)
-                  ? 'Confirmá cada parada con «Llegué en parada». '
+                  ? 'Tocá cada parada abajo → Waze → ✓. '
                       'Finalizar se activa al completar todas '
                       '(${_multiLegCompletadas.clamp(0, _legsNavegacionMultiparada(v).length)}/'
                       '${_legsNavegacionMultiparada(v).length}).'
                   : 'Multiparada: faltan destinos por confirmar '
                       '(${_multiLegCompletadas.clamp(0, _legsNavegacionMultiparada(v).length)}/'
                       '${_legsNavegacionMultiparada(v).length}). '
-                      'Usá «Llegué — siguiente destino» en cada parada.',
+                      'Tocá la parada → Waze → ✓.',
               style: const TextStyle(
                 color: Colors.orangeAccent,
                 fontSize: 13,
@@ -8174,7 +8406,7 @@ class _ViajeEnCursoTaxistaState extends State<ViajeEnCursoTaxista>
 
   String _labelFinalizarViaje(Viaje v) {
     if (_esViajeCorporativo(v)) return 'Finalizar ruta corporativa';
-    return v.tipoServicio == 'bola_ahorro' ? 'Finalizar bola' : 'Finalizar viaje';
+    return 'Finalizar viaje';
   }
 
   Widget _btnFinalizarViaje({

@@ -3,10 +3,16 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' as fs;
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/utils/crear_viaje_errores.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
@@ -18,19 +24,25 @@ import 'package:flygo_nuevo/servicios/rai_offline_cotizacion_service.dart';
 import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_banner.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_cliente_map_alert.dart';
 import 'package:flygo_nuevo/widgets/boton_volver_inicio_sin_confirmar.dart';
-import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_orientacion_banner.dart';
 import 'package:flygo_nuevo/widgets/cotizacion_precio_loading.dart';
 import 'package:flygo_nuevo/widgets/promo_mxk_cliente_panel.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
 import 'package:flygo_nuevo/widgets/parpadeo_ruta_programar.dart';
+import 'package:flygo_nuevo/servicios/cliente_metodo_pago_preferido_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_metodo_pago_solicitud_tiles.dart';
+import 'package:flygo_nuevo/widgets/campo_lugar_autocomplete.dart';
 import 'package:flygo_nuevo/widgets/programar_viaje_hoja_moderna.dart';
+import 'package:flygo_nuevo/servicios/lugares_service.dart';
+import 'package:flygo_nuevo/servicios/negocio_aliado_promo_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_negocio_aliado_cotizacion_banner.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 
 class _LugarSel {
@@ -57,6 +69,9 @@ class _EstiloRutaCampo {
 /// Variante visual de los campos de ruta (mockup: origen con glow, paradas finas, destino morado sólido).
 enum _RutaCampoVisual { origen, parada, destino }
 
+/// Campo activo para elegir punto con el mapa de fondo (sin pantalla aparte).
+enum _CampoRutaMapa { ninguno, origen, parada, destino }
+
 class ProgramarViajeMulti extends StatefulWidget {
   const ProgramarViajeMulti({super.key});
 
@@ -72,6 +87,8 @@ class ProgramarViajeMulti extends StatefulWidget {
 
 class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   static const int _kMaxParadasIntermedias = 5;
+  /// Etiqueta interna del origen GPS; no se muestra en el campo de texto (evita confusión al escribir).
+  static const String _kLabelOrigenGpsActual = 'Mi ubicación actual';
 
   _LugarSel? _origen;
   _LugarSel? _destino;
@@ -87,34 +104,49 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   double _precio = 0;
   double _peaje = 0;
   List<Map<String, dynamic>> _segmentos = [];
+  DirectionsResult? _directionsRutaMulti;
+
+  GoogleMapController? _map;
+  final Set<Marker> _mapMarkers = <Marker>{};
+  final Set<Polyline> _mapPolylines = <Polyline>{};
+  LatLng? _mapCentro;
 
   // 🔥 CACHÉ para el contador de viajes
   int? _contadorViajesCache;
   DateTime? _contadorTimestamp;
   Map<String, dynamic>? _promoSnapshotCotizacion;
+  Map<String, dynamic>? _cotizacionDesglose;
   bool _promoOmitidaPorLargaDistancia = false;
+  NegocioAliadoPromoEval? _negocioPromoEval;
 
   // Timer para debounce del cálculo automático
   Timer? _calculoDebounce;
 
-  final ScrollController _listaScroll = ScrollController();
+  final DraggableScrollableController _sheetCtrl =
+      DraggableScrollableController();
+
+  static const double _sheetMinFracMulti = 0.28;
+
+  int _mapProgrammaticCameraDepth = 0;
+  Timer? _multiMapGestureEndDebounce;
+  bool _resolviendoDestinoMapa = false;
+  int _destinoMapaSeq = 0;
+  _CampoRutaMapa _campoMapaActivo = _CampoRutaMapa.ninguno;
+  int? _paradaMapaActiva;
 
   /// Evita que un cálculo en curso bloquee el siguiente (varios tramos tardan más que el debounce).
   int _calculoSeq = 0;
 
   /// Resumen compacto tras cotizar.
   bool _vistaResumenCotizada = false;
+  String _metodoPagoCategoria = 'efectivo';
+  bool _metodoPagoElegidoPorCliente = false;
 
   Color get _colorServicio => Colors.greenAccent;
 
   void _scrollAlResumenCotizado() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_listaScroll.hasClients) return;
-      _listaScroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOutCubic,
-      );
+      unawaited(_expandMultiSheetTrasCotizar());
     });
   }
 
@@ -125,7 +157,403 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     RaiUbicacionClienteService.instance.modo
         .addListener(_onModoUbicacionCliente);
     unawaited(_precargarOrigenGpsSiListo());
+    unawaited(_cargarMetodoPagoPreferido());
   }
+
+  EdgeInsets _multiMapPadding(BuildContext context) {
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double h = mq.size.height;
+    // Padding fijo según fase (no escuchar cada frame del sheet → evita
+    // reconstruir GoogleMap al tocar/arrastrar el mapa).
+    final double sheetFrac = _mostrarResumenMulti ? 0.56 : 0.38;
+    return EdgeInsets.only(
+      top: mq.padding.top + 8,
+      bottom: h * sheetFrac + 12,
+      left: 40,
+      right: 40,
+    );
+  }
+
+  Future<void> _expandMultiSheetTrasCotizar() async {
+    if (!_sheetCtrl.isAttached) return;
+    try {
+      await _sheetCtrl.animateTo(
+        0.56,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  void _onMultiMapCameraIdle() {
+    if (_mapProgrammaticCameraDepth > 0) {
+      _mapProgrammaticCameraDepth--;
+      return;
+    }
+    _multiMapGestureEndDebounce?.cancel();
+    if (mounted) _expandMultiSheetTrasMapaInteract();
+  }
+
+  void _expandMultiSheetTrasMapaInteract() {
+    if (!_sheetCtrl.isAttached) return;
+    final double target = _mostrarResumenMulti ? 0.56 : 0.42;
+    try {
+      _sheetCtrl.animateTo(
+        target.clamp(_sheetMinFracMulti, 0.75),
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  void _onMultiMapUserGesture() {
+    if (_mapProgrammaticCameraDepth > 0) return;
+    unawaited(_collapseMultiSheetForMap());
+  }
+
+  Future<void> _collapseMultiSheetForMap() async {
+    if (!_sheetCtrl.isAttached) return;
+    try {
+      final double s = _sheetCtrl.size;
+      if (s <= _sheetMinFracMulti + 0.03) return;
+      await _sheetCtrl.animateTo(
+        _sheetMinFracMulti,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _multiMapAnimate(
+    Future<void> Function(GoogleMapController c) op,
+  ) async {
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    _mapProgrammaticCameraDepth++;
+    try {
+      await op(c).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      if (_mapProgrammaticCameraDepth > 0) _mapProgrammaticCameraDepth--;
+    }
+  }
+
+  bool _puedeElegirDestinoEnMapa() => true;
+
+  void _activarCampoEnMapa(
+    _CampoRutaMapa campo, {
+    int? paradaIndex,
+  }) {
+    setState(() {
+      _campoMapaActivo = campo;
+      _paradaMapaActiva = paradaIndex;
+    });
+  }
+
+  void _onCampoRutaEnfocado(
+    _CampoRutaMapa campo, {
+    int? paradaIndex,
+  }) {
+    _activarCampoEnMapa(campo, paradaIndex: paradaIndex);
+    unawaited(_expandMultiSheetParaEscribir());
+  }
+
+  Future<void> _expandMultiSheetParaEscribir() async {
+    if (!_sheetCtrl.isAttached) return;
+    try {
+      await _sheetCtrl.animateTo(
+        0.75.clamp(_sheetMinFracMulti, 0.88),
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    } catch (_) {}
+  }
+
+  /// Sin campo activo: origen → paradas en uso → destino final.
+  ({_CampoRutaMapa campo, int? paradaIndex}) _campoMapaParaTapLibre() {
+    if (_origen == null) {
+      return (campo: _CampoRutaMapa.origen, paradaIndex: null);
+    }
+    final bool usaParadasIntermedias = _paradas.length > 1 ||
+        _paradas.whereType<_LugarSel>().isNotEmpty;
+    if (usaParadasIntermedias) {
+      for (int i = 0; i < _paradas.length; i++) {
+        if (_paradas[i] == null) {
+          return (campo: _CampoRutaMapa.parada, paradaIndex: i);
+        }
+      }
+    }
+    return (campo: _CampoRutaMapa.destino, paradaIndex: null);
+  }
+
+  void _invalidarCotizacionMulti({bool limpiarRutaMapa = true}) {
+    _vistaResumenCotizada = false;
+    _precio = 0;
+    _distKm = 0;
+    _peaje = 0;
+    _segmentos = <Map<String, dynamic>>[];
+    if (limpiarRutaMapa) {
+      _directionsRutaMulti = null;
+    }
+    _cotizacionDesglose = null;
+    _promoSnapshotCotizacion = null;
+  }
+
+  void _aplicarDetalleEnCampo(
+    DetalleLugar det, {
+    required _CampoRutaMapa campo,
+    int? paradaIndex,
+    required String fallbackLabel,
+  }) {
+    final _LugarSel lugar = _lugarNormalizado(
+      _LugarSel(
+        label: MultiparadaRutaHelper.normalizarLabel(
+          det.displayLabel,
+          fallbackLabel,
+        ),
+        lat: det.lat,
+        lon: det.lon,
+      ),
+      fallbackLabel: fallbackLabel,
+    );
+    setState(() {
+      switch (campo) {
+        case _CampoRutaMapa.origen:
+          _origen = lugar;
+          break;
+        case _CampoRutaMapa.destino:
+          _destino = lugar;
+          break;
+        case _CampoRutaMapa.parada:
+          if (paradaIndex != null && paradaIndex >= 0 &&
+              paradaIndex < _paradas.length) {
+            _paradas[paradaIndex] = lugar;
+          }
+          break;
+        case _CampoRutaMapa.ninguno:
+          break;
+      }
+      _campoMapaActivo = _CampoRutaMapa.ninguno;
+      _paradaMapaActiva = null;
+      _actualizarMapaMultiparada();
+      if (campo != _CampoRutaMapa.destino) {
+        _invalidarCotizacionMulti();
+      }
+    });
+    if (campo == _CampoRutaMapa.destino && _paradasIntermediasCoherentes()) {
+      _programarCalculoAutomatico();
+    }
+  }
+
+  Widget _campoLugarIntegrado({
+    required String label,
+    required String hint,
+    String? value,
+    required bool esOrigen,
+    required _CampoRutaMapa campoMapa,
+    int? paradaIndex,
+    required String fallbackLabel,
+    _EstiloRutaCampo? estilo,
+    _RutaCampoVisual visual = _RutaCampoVisual.parada,
+    bool legacyRutaCampos = false,
+    bool mockupLayoutCampo = false,
+  }) {
+    final bool activo = _campoMapaActivo == campoMapa &&
+        (campoMapa != _CampoRutaMapa.parada ||
+            _paradaMapaActiva == paradaIndex);
+
+    return DecoratedBox(
+      decoration: activo
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: estilo?.acento ?? _colorServicio,
+                width: 2.2,
+              ),
+            )
+          : const BoxDecoration(),
+      child: Padding(
+        padding: activo ? const EdgeInsets.all(2) : EdgeInsets.zero,
+        child: CampoLugarAutocomplete(
+          key: esOrigen
+              ? ValueKey<String>(
+                  'multi_orig_${_origen?.lat}_${_origen?.lon}_${_origen?.label}',
+                )
+              : campoMapa == _CampoRutaMapa.destino
+                  ? ValueKey<String>(
+                      'multi_dest_${_destino?.lat}_${_destino?.lon}_${_destino?.label}',
+                    )
+                  : ValueKey<String>(
+                      'multi_parada_${paradaIndex ?? -1}_${value ?? ''}',
+                    ),
+          label: label,
+          hint: hint,
+          initialText: esOrigen ? _textoVisibleCampoOrigen(value) : value,
+          mapaIntegradoEnPantalla: true,
+          esCampoOrigen: esOrigen,
+          asistenteDireccionHabilitado: true,
+          biasLat: _origen?.lat ?? _mapCentro?.latitude,
+          biasLon: _origen?.lon ?? _mapCentro?.longitude,
+          fieldAccent: estilo?.acento,
+          fieldFill: estilo?.fondo,
+          onCampoEnfocado: () =>
+              _onCampoRutaEnfocado(campoMapa, paradaIndex: paradaIndex),
+          onPlaceSelected: (DetalleLugar det) {
+            _aplicarDetalleEnCampo(
+              det,
+              campo: campoMapa,
+              paradaIndex: paradaIndex,
+              fallbackLabel: fallbackLabel,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  String? get _mensajeSeleccionMapaActiva {
+    switch (_campoMapaActivo) {
+      case _CampoRutaMapa.origen:
+        return 'Tocá el mapa para marcar el punto de partida';
+      case _CampoRutaMapa.destino:
+        return 'Tocá el mapa para marcar el destino final';
+      case _CampoRutaMapa.parada:
+        final int i = (_paradaMapaActiva ?? 0) + 1;
+        return 'Tocá el mapa para marcar la parada $i';
+      case _CampoRutaMapa.ninguno:
+        return null;
+    }
+  }
+
+  /// Tocá o mantené pulsado el mapa → punto en el campo activo (o el siguiente vacío).
+  Future<void> _aplicarPuntoDesdeMapa(LatLng p) async {
+    if (!_puedeElegirDestinoEnMapa()) return;
+
+    unawaited(_collapseMultiSheetForMap());
+
+    _CampoRutaMapa campo = _campoMapaActivo;
+    int? paradaIndex = _paradaMapaActiva;
+    if (campo == _CampoRutaMapa.ninguno) {
+      final ({_CampoRutaMapa campo, int? paradaIndex}) libre =
+          _campoMapaParaTapLibre();
+      campo = libre.campo;
+      paradaIndex = libre.paradaIndex;
+      if (mounted) {
+        setState(() {
+          _campoMapaActivo = campo;
+          _paradaMapaActiva = paradaIndex;
+        });
+      }
+    }
+
+    String fallbackLabel;
+    switch (campo) {
+      case _CampoRutaMapa.origen:
+        fallbackLabel = 'Origen';
+        break;
+      case _CampoRutaMapa.parada:
+        fallbackLabel = 'Parada ${(paradaIndex ?? 0) + 1}';
+        break;
+      case _CampoRutaMapa.destino:
+      case _CampoRutaMapa.ninguno:
+        fallbackLabel = 'Destino final';
+        campo = _CampoRutaMapa.destino;
+        break;
+    }
+
+    if (campo == _CampoRutaMapa.parada &&
+        (paradaIndex == null ||
+            paradaIndex < 0 ||
+            paradaIndex >= _paradas.length)) {
+      return;
+    }
+
+    if (campo != _CampoRutaMapa.origen && _origen == null) return;
+
+    final int seq = ++_destinoMapaSeq;
+
+    if (mounted) {
+      setState(() {
+        _resolviendoDestinoMapa = true;
+        if (campo == _CampoRutaMapa.destino) {
+          _invalidarCotizacionMulti();
+        }
+        _actualizarMapaMultiparada();
+      });
+    }
+
+    final det = await LugaresService.instance.detalleDesdeCoordenadas(
+      p.latitude,
+      p.longitude,
+    );
+
+    if (!mounted || seq != _destinoMapaSeq) return;
+
+    final resolved = det ??
+        DetalleLugar(
+          placeId:
+              'map_tap:${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}',
+          name: 'Punto elegido en el mapa',
+          address:
+              '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}',
+          lat: p.latitude,
+          lon: p.longitude,
+        );
+
+    await LugaresService.instance.guardarReciente(
+      DetalleLugar(
+        placeId: resolved.placeId,
+        name: resolved.name,
+        address: resolved.address,
+        lat: p.latitude,
+        lon: p.longitude,
+      ),
+    );
+
+    if (!mounted || seq != _destinoMapaSeq) return;
+
+    _aplicarDetalleEnCampo(
+      DetalleLugar(
+        placeId: resolved.placeId,
+        name: resolved.name,
+        address: resolved.address,
+        lat: p.latitude,
+        lon: p.longitude,
+      ),
+      campo: campo,
+      paradaIndex: paradaIndex,
+      fallbackLabel: fallbackLabel,
+    );
+
+    if (!mounted || seq != _destinoMapaSeq) return;
+
+    setState(() => _resolviendoDestinoMapa = false);
+    _expandMultiSheetTrasMapaInteract();
+  }
+
+  void _onLongPressMapMulti(LatLng p) {
+    unawaited(_aplicarPuntoDesdeMapa(p));
+  }
+
+  Future<void> _cargarMetodoPagoPreferido() async {
+    final String cat =
+        await ClienteMetodoPagoPreferidoService.cargarCategoria();
+    // Si el cliente ya eligió mientras leíamos prefs, su toque manda.
+    if (!mounted || _metodoPagoElegidoPorCliente) return;
+    setState(() => _metodoPagoCategoria = cat);
+  }
+
+  void _onMetodoPagoCategoriaChanged(String cat) {
+    setState(() {
+      _metodoPagoElegidoPorCliente = true;
+      _metodoPagoCategoria = cat;
+    });
+    unawaited(ClienteMetodoPagoPreferidoService.guardarCategoria(cat));
+  }
+
+  String get _metodoPagoEtiquetaDocumento =>
+      ClienteMetodoPagoPreferidoService.etiquetaDocumentoDesdeCategoria(
+        _metodoPagoCategoria,
+      );
 
   void _onModoUbicacionCliente() {
     if (!mounted) return;
@@ -150,10 +578,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       if (!mounted) return;
       setState(() {
         _origen = _LugarSel(
-          label: 'Mi ubicación actual',
+          label: _kLabelOrigenGpsActual,
           lat: pos.latitude,
           lon: pos.longitude,
         );
+        _actualizarMapaMultiparada();
       });
       _programarCalculoAutomatico();
       unawaited(RaiUbicacionClienteService.instance.refrescar());
@@ -167,10 +596,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
   @override
   void dispose() {
+    _sheetCtrl.dispose();
     RaiUbicacionClienteService.instance.modo
         .removeListener(_onModoUbicacionCliente);
     _calculoDebounce?.cancel();
-    _listaScroll.dispose();
+    _multiMapGestureEndDebounce?.cancel();
     super.dispose();
   }
 
@@ -206,16 +636,140 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
-  Future<_LugarSel?> _buscarLugar(String titulo) async {
-    return showModalBottomSheet<_LugarSel?>(
-      context: context,
-      backgroundColor: const Color(0xFF0E0E0E),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (bc) => _BuscarLugarSheet(titulo: titulo),
-    );
+  bool _precioCotizadoValidoParaValor(double precio) =>
+      precio > 0 ||
+      (_negocioPromoEval?.esViajeGratis == true && precio >= 0);
+
+  Future<double> _aplicarPromoNegocioAliado(double precioNominal) async {
+    _negocioPromoEval = null;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || precioNominal <= 0) return precioNominal;
+    try {
+      final snap = await fs.FirebaseFirestore.instance
+          .collection('usuarios')
+          .doc(user.uid)
+          .get();
+      final eval = await NegocioAliadoPromoService.evaluarConUbicacion(
+        usuario: snap.data(),
+        precioNominalRd: precioNominal,
+        origen: _origen?.label ?? '',
+        destino: _destino?.label ?? '',
+        latOrigen: _origen?.lat,
+        lonOrigen: _origen?.lon,
+        latDestino: _destino?.lat,
+        lonDestino: _destino?.lon,
+      );
+      if (eval != null) {
+        _negocioPromoEval = eval;
+        return eval.precioClienteRd;
+      }
+    } catch (e) {
+      debugPrint('Promo negocio aliado multi: $e');
+    }
+    return precioNominal;
+  }
+
+  void _actualizarMapaMultiparada() {
+    final List<_LugarSel> puntos = <_LugarSel>[
+      if (_origen != null) _origen!,
+      ..._paradas.whereType<_LugarSel>(),
+      if (_destino != null) _destino!,
+    ];
+    _mapMarkers.clear();
+    _mapPolylines.clear();
+    if (puntos.isEmpty) {
+      _mapCentro = null;
+      return;
+    }
+
+    for (int i = 0; i < puntos.length; i++) {
+      final _LugarSel p = puntos[i];
+      final bool esPrimero = i == 0;
+      final bool esUltimo = i == puntos.length - 1;
+      _mapMarkers.add(
+        Marker(
+          markerId: MarkerId('mp_$i'),
+          position: LatLng(p.lat, p.lon),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            esPrimero
+                ? BitmapDescriptor.hueOrange
+                : (esUltimo
+                    ? BitmapDescriptor.hueGreen
+                    : BitmapDescriptor.hueAzure),
+          ),
+          infoWindow: InfoWindow(
+            title: esPrimero
+                ? 'Origen'
+                : (esUltimo ? 'Destino' : 'Parada $i'),
+            snippet: p.label,
+          ),
+        ),
+      );
+    }
+
+    final List<LatLng>? path = _directionsRutaMulti?.path;
+    if (path != null && path.length >= 2) {
+      _mapPolylines.add(
+        Polyline(
+          polylineId: const PolylineId('ruta_multi'),
+          points: path,
+          width: 5,
+          color: const Color(0xFF49F18B),
+          geodesic: true,
+        ),
+      );
+    } else if (puntos.length >= 2) {
+      _mapPolylines.add(
+        Polyline(
+          polylineId: const PolylineId('ruta_multi'),
+          points: puntos.map((p) => LatLng(p.lat, p.lon)).toList(),
+          width: 4,
+          color: const Color(0xFF49F18B),
+          geodesic: true,
+        ),
+      );
+    }
+
+    _mapCentro = LatLng(puntos.first.lat, puntos.first.lon);
+  }
+
+  Future<void> _ajustarCamaraMapaMultiparada() async {
+    if (_map == null) return;
+    await _multiMapAnimate((GoogleMapController map) async {
+      final List<_LugarSel> puntos = <_LugarSel>[
+        if (_origen != null) _origen!,
+        ..._paradas.whereType<_LugarSel>(),
+        if (_destino != null) _destino!,
+      ];
+      if (puntos.isEmpty) return;
+      if (puntos.length == 1) {
+        await map.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(puntos.first.lat, puntos.first.lon),
+            14,
+          ),
+        );
+        return;
+      }
+      double minLat = puntos.first.lat;
+      double maxLat = minLat;
+      double minLon = puntos.first.lon;
+      double maxLon = minLon;
+      for (final _LugarSel p in puntos.skip(1)) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+      await RaiMapPresentation.fitBounds(
+        map,
+        LatLngBounds(
+          southwest: LatLng(minLat, minLon),
+          northeast: LatLng(maxLat, maxLon),
+        ),
+        padding: 56,
+      );
+    });
   }
 
   Future<Map<String, double>> _calcularTramoReal(
@@ -499,10 +1053,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     }
   }
 
-  // ✅ CÁLCULO AUTOMÁTICO - SE EJECUTA CUANDO HAY ORIGEN Y DESTINO
+  // Cotización solo cuando hay origen, destino y paradas coherentes.
   void _programarCalculoAutomatico() {
-    // Solo calcular si tenemos origen Y destino
     if (_origen == null || _destino == null) {
+      return;
+    }
+    if (!_paradasIntermediasCoherentes()) {
       return;
     }
 
@@ -527,7 +1083,175 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   static const double _kMetrosRecotizarAlConfirmar = 120;
 
   bool get _origenEsGpsActual =>
-      _origen?.label.trim() == 'Mi ubicación actual';
+      _origen?.label.trim() == _kLabelOrigenGpsActual;
+
+  String? _textoVisibleCampoOrigen(String? label) {
+    final String t = (label ?? '').trim();
+    if (t.isEmpty || t == _kLabelOrigenGpsActual) return null;
+    return label;
+  }
+
+  String _etiquetaOrigenResumen() {
+    if (_origen == null) return '';
+    if (_origenEsGpsActual) return 'Tu ubicación GPS';
+    return _origen!.label;
+  }
+
+  Future<_LugarSel> _origenListoParaGuardar(_LugarSel raw) async {
+    final _LugarSel base = _lugarNormalizado(raw, fallbackLabel: 'Origen');
+    final bool esGps = base.label.trim() == _kLabelOrigenGpsActual;
+    if (!esGps) {
+      return base;
+    }
+    try {
+      final DetalleLugar? det =
+          await LugaresService.instance.detalleDesdeCoordenadas(
+        base.lat,
+        base.lon,
+      );
+      if (det != null) {
+        return _lugarNormalizado(
+          _LugarSel(
+            label: MultiparadaRutaHelper.normalizarLabel(
+              det.displayLabel,
+              'Origen',
+            ),
+            lat: det.lat,
+            lon: det.lon,
+          ),
+          fallbackLabel: 'Origen',
+        );
+      }
+    } catch (_) {}
+    return _lugarNormalizado(
+      _LugarSel(
+        label: 'Tu ubicación GPS',
+        lat: base.lat,
+        lon: base.lon,
+      ),
+      fallbackLabel: 'Origen',
+    );
+  }
+
+  /// Origen, paradas, destino, waypoints y segmentos alineados para Firestore.
+  Future<
+      ({
+        _LugarSel origen,
+        _LugarSel destino,
+        List<Map<String, dynamic>> waypoints,
+        List<Map<String, dynamic>> rutaPuntos,
+        List<Map<String, dynamic>> segmentos,
+        double distKm,
+        double peaje,
+      })?> _prepararDatosRutaMultiparadaGuardar() async {
+    _compactarParadasVaciasAlFinal();
+
+    final _LugarSel origenGuardar = await _origenListoParaGuardar(_origen!);
+    final _LugarSel destinoGuardar = _lugarNormalizado(
+      _destino!,
+      fallbackLabel: 'Destino final',
+    );
+
+    final List<_LugarSel> paradasOrdenadas = _paradasIntermediasOrdenadas();
+    final List<Map<String, dynamic>> waypointsRaw = <Map<String, dynamic>>[];
+    for (int i = 0; i < paradasOrdenadas.length; i++) {
+      final _LugarSel p = _lugarNormalizado(
+        paradasOrdenadas[i],
+        fallbackLabel: 'Parada ${i + 1}',
+      );
+      waypointsRaw.add(<String, dynamic>{
+        'lat': p.lat,
+        'lon': p.lon,
+        'label': p.label,
+        'orden': i + 1,
+      });
+    }
+    final List<Map<String, dynamic>> waypoints =
+        MultiparadaRutaHelper.sanitizarWaypoints(waypointsRaw);
+    if (waypoints.length != paradasOrdenadas.length) {
+      return null;
+    }
+
+    final List<({String label, double lat, double lon})> puntosOrdenados =
+        <({String label, double lat, double lon})>[
+      (
+        label: origenGuardar.label,
+        lat: origenGuardar.lat,
+        lon: origenGuardar.lon,
+      ),
+      ...waypoints.map(
+        (Map<String, dynamic> w) => (
+          label: (w['label'] ?? 'Parada').toString(),
+          lat: (w['lat'] as num).toDouble(),
+          lon: (w['lon'] as num).toDouble(),
+        ),
+      ),
+      (
+        label: destinoGuardar.label,
+        lat: destinoGuardar.lat,
+        lon: destinoGuardar.lon,
+      ),
+    ];
+
+    final List<Map<String, dynamic>> rutaPuntos =
+        MultiparadaRutaHelper.construirRutaPuntos(
+      latOrigen: origenGuardar.lat,
+      lonOrigen: origenGuardar.lon,
+      labelOrigen: origenGuardar.label,
+      latDestino: destinoGuardar.lat,
+      lonDestino: destinoGuardar.lon,
+      labelDestino: destinoGuardar.label,
+      waypoints: waypoints,
+    );
+
+    final List<Map<String, dynamic>> segmentosGuardar =
+        MultiparadaRutaHelper.alinearSegmentosConPuntos(
+      segmentos: _segmentos,
+      puntosOrdenados: puntosOrdenados,
+    );
+
+    final int tramosEsperados = _tramosEsperadosMulti();
+    if (segmentosGuardar.length != tramosEsperados) {
+      return null;
+    }
+
+    final double distKmGuardar = _distanciaKmDesdeSegmentos(segmentosGuardar);
+    final double peajeGuardar = _peajeDesdeSegmentos(segmentosGuardar);
+    if (distKmGuardar <= 0) {
+      return null;
+    }
+
+    final String? errorCoords = MultiparadaRutaHelper.validarSecuenciaRuta(
+      latOrigen: origenGuardar.lat,
+      lonOrigen: origenGuardar.lon,
+      labelOrigen: origenGuardar.label,
+      latDestino: destinoGuardar.lat,
+      lonDestino: destinoGuardar.lon,
+      labelDestino: destinoGuardar.label,
+      paradas: waypoints
+          .map(
+            (Map<String, dynamic> w) => (
+              lat: (w['lat'] as num).toDouble(),
+              lon: (w['lon'] as num).toDouble(),
+              label: (w['label'] ?? 'Parada').toString(),
+            ),
+          )
+          .toList(),
+    );
+    if (errorCoords != null) {
+      return null;
+    }
+
+    return (
+      origen: origenGuardar,
+      destino: destinoGuardar,
+      waypoints: waypoints,
+      rutaPuntos: rutaPuntos,
+      segmentos: segmentosGuardar,
+      distKm: distKmGuardar,
+      peaje: peajeGuardar,
+    );
+  }
 
   int _tramosEsperadosMulti() {
     if (_origen == null || _destino == null) return 0;
@@ -589,7 +1313,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (!cotizacionPendiente &&
         _segmentos.length == tramos &&
         !_cotizacionDesfasadaDePuntos() &&
-        _precio > 0 &&
+        _precioCotizadoValidoParaValor(_precio) &&
         _distKm > 0) {
       return true;
     }
@@ -601,7 +1325,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (!mounted || runId != _calculoSeq) return false;
     return _segmentos.length == tramos &&
         !_cotizacionDesfasadaDePuntos() &&
-        _precio > 0 &&
+        _precioCotizadoValidoParaValor(_precio) &&
         _distKm > 0;
   }
 
@@ -612,7 +1336,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (_origen == null || _destino == null) return false;
     if (!_paradasIntermediasCoherentes()) return false;
     if (_validarRutaMultiParaGuardar() != null) return false;
-    if (_precio <= 0 || _distKm <= 0 || _segmentos.isEmpty) return false;
+    if (_precioCotizadoValidoParaValor(_precio) == false || _distKm <= 0 || _segmentos.isEmpty) return false;
     final int tramos = _tramosEsperadosMulti();
     if (tramos <= 0 || _segmentos.length != tramos) return false;
     if (_cotizacionDesfasadaDePuntos()) return false;
@@ -645,14 +1369,14 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     );
 
     if (metros <= _kMetrosRecotizarAlConfirmar) {
-      return _precio > 0 && _distKm > 0;
+      return _precioCotizadoValidoParaValor(_precio) && _distKm > 0;
     }
 
     _calculoSeq++;
     final int runId = _calculoSeq;
     await _calcularConRutasReales(automatico: true, runId: runId);
     if (!mounted || runId != _calculoSeq) return false;
-    return _precio > 0 && _distKm > 0;
+    return _precioCotizadoValidoParaValor(_precio) && _distKm > 0;
   }
 
   Future<void> _calcularConRutasReales({
@@ -680,6 +1404,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       final List<Map<String, dynamic>> segmentos = <Map<String, dynamic>>[];
       double totalKm = 0;
       double totalPeaje = 0;
+      DirectionsResult? directionsRutaMulti;
 
       Future<bool> armarDesdeDirectionsUnaSola() async {
         final List<({double lat, double lon})>? wpCoords = waypoints.isEmpty
@@ -712,6 +1437,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         if (dir == null || dir.km <= 0) {
           return false;
         }
+        directionsRutaMulti = dir;
 
         List<double> segs = <double>[];
         if (segsRaw != null &&
@@ -916,7 +1642,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         }
       }
 
-      final double precio = await servicio.calcularPrecio(
+      final double precioNominal = await servicio.calcularPrecio(
         tipoServicio: 'normal',
         tipoVehiculo: _tipoVehiculo,
         distanciaKm: totalKm,
@@ -924,7 +1650,11 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         peaje: totalPeaje,
         contadorViajes: contadorViajes,
         forzarTarifaUrbanaLocal: urbanaLocal,
+        directionsCotizacion: directionsRutaMulti,
+        latOrigenCotizacion: _origen!.lat,
+        lonOrigenCotizacion: _origen!.lon,
       );
+      final double precio = await _aplicarPromoNegocioAliado(precioNominal);
 
       if (!mounted || runId != _calculoSeq) {
         _finCargaMultiSiCorre(runId);
@@ -936,15 +1666,21 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         _precio = precio;
         _peaje = totalPeaje;
         _segmentos = segmentos;
+        _directionsRutaMulti = directionsRutaMulti;
         _promoSnapshotCotizacion = promoSnapshot;
+        _cotizacionDesglose = servicio.ultimoDesgloseCotizacion;
         _promoOmitidaPorLargaDistancia =
             servicio.ultimoDesgloseCotizacion?['promoOmitidaPorLargaDistancia'] ==
                 true;
         _cargando = false;
         _mensajeCarga = '';
         _vistaResumenCotizada = true;
+        _actualizarMapaMultiparada();
       });
       _scrollAlResumenCotizado();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_ajustarCamaraMapaMultiparada());
+      });
     } catch (e) {
       if (!automatico && runId == _calculoSeq) {
         _snack('Error calculando rutas: $e');
@@ -962,7 +1698,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     if (!_puedeConfirmarViajeMulti) {
       if (_calculoDebounce?.isActive == true || _cargando) {
         _snack('Espera a que termine el cálculo del precio.');
-      } else if (_precio <= 0 || _distKm <= 0) {
+      } else if (!_precioCotizadoValidoParaValor(_precio) || _distKm <= 0) {
         _snack('Primero calcula el precio.');
       } else if (!_paradasIntermediasCoherentes()) {
         _snack('Completa las paradas en orden o quita las filas vacías.');
@@ -980,6 +1716,14 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     final User? u = FirebaseAuth.instance.currentUser;
     if (u == null) {
       _snack('Debes iniciar sesión.');
+      return;
+    }
+
+    if (await ActiveTripService.clienteViajeActivoImpideNuevoPedido(
+      u.uid,
+      nuevoEsAhora: _esAhora,
+    )) {
+      _snack(kMsgClienteYaTieneViajeActivo);
       return;
     }
 
@@ -1076,99 +1820,39 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         return;
       }
 
-      _compactarParadasVaciasAlFinal();
-      final _LugarSel origenGuardar = _lugarNormalizado(
-        _origen!,
-        fallbackLabel: 'Origen',
-      );
-      final _LugarSel destinoGuardar = _lugarNormalizado(
-        _destino!,
-        fallbackLabel: 'Destino final',
-      );
-      final List<_LugarSel> paradasOrdenadas = _paradasIntermediasOrdenadas();
-      final List<_LugarSel> paradasGuardar = <_LugarSel>[];
-      for (int i = 0; i < paradasOrdenadas.length; i++) {
-        paradasGuardar.add(
-          _lugarNormalizado(
-            paradasOrdenadas[i],
-            fallbackLabel: 'Parada ${i + 1}',
-          ),
-        );
-      }
-
-      final List<Map<String, dynamic>> waypointsRaw = <Map<String, dynamic>>[];
-      for (int i = 0; i < paradasGuardar.length; i++) {
-        final _LugarSel p = paradasGuardar[i];
-        waypointsRaw.add(<String, dynamic>{
-          'lat': p.lat,
-          'lon': p.lon,
-          'label': p.label,
-          'orden': i + 1,
-        });
-      }
-      final List<Map<String, dynamic>> waypoints =
-          MultiparadaRutaHelper.sanitizarWaypoints(waypointsRaw);
-      if (waypoints.length != paradasGuardar.length) {
+      final ({
+        _LugarSel origen,
+        _LugarSel destino,
+        List<Map<String, dynamic>> waypoints,
+        List<Map<String, dynamic>> rutaPuntos,
+        List<Map<String, dynamic>> segmentos,
+        double distKm,
+        double peaje,
+      })? plan = await _prepararDatosRutaMultiparadaGuardar();
+      if (plan == null) {
         _snack(
-          'Una o más paradas no tienen ubicación válida. Revisá el mapa e inténtalo de nuevo.',
+          'No se pudo validar origen, paradas y destino. Revisá el mapa e inténtalo de nuevo.',
         );
         if (mounted) setState(() => _cargando = false);
         return;
       }
 
-      final List<({String label, double lat, double lon})> puntosOrdenados =
-          <({String label, double lat, double lon})>[
-        (
-          label: origenGuardar.label,
-          lat: origenGuardar.lat,
-          lon: origenGuardar.lon,
-        ),
-        ...waypoints.map(
-          (Map<String, dynamic> w) => (
-            label: (w['label'] ?? 'Parada').toString(),
-            lat: (w['lat'] as num).toDouble(),
-            lon: (w['lon'] as num).toDouble(),
-          ),
-        ),
-        (
-          label: destinoGuardar.label,
-          lat: destinoGuardar.lat,
-          lon: destinoGuardar.lon,
-        ),
-      ];
+      final _LugarSel origenGuardar = plan.origen;
+      final _LugarSel destinoGuardar = plan.destino;
+      final List<Map<String, dynamic>> waypoints = plan.waypoints;
+      final List<Map<String, dynamic>> rutaPuntos = plan.rutaPuntos;
+      final List<Map<String, dynamic>> segmentosGuardar = plan.segmentos;
+      final double distKmGuardar = plan.distKm;
+      final double peajeGuardar = plan.peaje;
 
-      final List<Map<String, dynamic>> rutaPuntos =
-          MultiparadaRutaHelper.construirRutaPuntos(
-        latOrigen: origenGuardar.lat,
-        lonOrigen: origenGuardar.lon,
-        labelOrigen: origenGuardar.label,
-        latDestino: destinoGuardar.lat,
-        lonDestino: destinoGuardar.lon,
-        labelDestino: destinoGuardar.label,
-        waypoints: waypoints,
-      );
-
-      const String tipoSrv = 'normal';
-      const String canal = 'pool';
-
-      final List<Map<String, dynamic>> segmentosGuardar =
-          MultiparadaRutaHelper.alinearSegmentosConPuntos(
-        segmentos: _segmentos,
-        puntosOrdenados: puntosOrdenados,
-      );
-      final int tramosEsperados = _tramosEsperadosMulti();
-      if (segmentosGuardar.length != tramosEsperados) {
-        _snack('La ruta cambió. Vuelve a cotizar antes de confirmar.');
-        if (mounted) setState(() => _cargando = false);
-        return;
-      }
-      final double distKmGuardar = _distanciaKmDesdeSegmentos(segmentosGuardar);
-      final double peajeGuardar = _peajeDesdeSegmentos(segmentosGuardar);
-      if (distKmGuardar <= 0 || _precio <= 0) {
+      if (!_precioCotizadoValidoParaValor(_precio)) {
         _snack('No se pudo validar precio y distancia de la ruta.');
         if (mounted) setState(() => _cargando = false);
         return;
       }
+
+      const String tipoSrv = 'normal';
+      const String canal = 'pool';
 
       final DateTime nowUtc = DateTime.now().toUtc();
       // Misma política que [ProgramarViaje] modoAhora: recogida = ahora (UTC), no +10 min.
@@ -1201,7 +1885,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         lonDestino: destinoGuardar.lon,
         fechaHora: fechaHoraViaje,
         precio: _precio,
-        metodoPago: 'Efectivo',
+        metodoPago: _metodoPagoEtiquetaDocumento,
         tipoVehiculo: _tipoVehiculo,
         idaYVuelta: false,
         categoria: 'multi',
@@ -1215,8 +1899,16 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
           'peaje_total': peajeGuardar,
           'distancia_km': distKmGuardar,
           'esAhora': viajeInmediato,
+          if (_cotizacionDesglose != null && _cotizacionDesglose!.isNotEmpty)
+            'cotizacionDesglose': _cotizacionDesglose,
           if (_promoSnapshotCotizacion != null)
             'promoSnapshot': _promoSnapshotCotizacion,
+          if (_cotizacionDesglose?['precioBloqueado'] == true)
+            'precioBloqueado': true,
+          if (_cotizacionDesglose?['recargoCondiciones'] != null)
+            'cotizacionCondiciones': _cotizacionDesglose!['recargoCondiciones'],
+          if (_cotizacionDesglose?['recargoCondiciones'] != null)
+            'precioBloqueado': true,
         },
         distanciaKm: distKmGuardar,
         canalAsignacion: canal,
@@ -1230,17 +1922,31 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       }
 
       navegoFuera = true;
-      await NavigationService.navegarTrasCrearViajeCliente(
-        viajeId: id,
-        fechaHoraPickup: fechaHoraViaje,
-        tipoServicio: tipoSrv,
-        preNav: nav.tab,
-        preNavRaiz: nav.raiz,
-        forzarViajeInmediato: _esAhora,
-      );
+      final bool viajeOverlayInmediato = _esAhora || viajeInmediato;
+      if (viajeOverlayInmediato) {
+        await NavigationService.navegarTrasConfirmarViajeInmediatoCliente(
+          viajeId: id,
+          fechaHoraPickup: fechaHoraViaje,
+          preNav: nav.tab,
+          preNavRaiz: nav.raiz,
+        );
+      } else {
+        await NavigationService.navegarTrasCrearViajeCliente(
+          viajeId: id,
+          fechaHoraPickup: fechaHoraViaje,
+          tipoServicio: tipoSrv,
+          preNav: nav.tab,
+          preNavRaiz: nav.raiz,
+          abrirEnCursoAlConfirmar: true,
+        );
+      }
+    } on ClienteVerificacionIdentidadRequeridaException catch (e) {
+      if (mounted) _snack(e.message);
+    } on FirebaseFunctionsException catch (e) {
+      if (mounted) _snack(CrearViajeErrores.traducir(e));
     } on fs.FirebaseException catch (e) {
       if (mounted) {
-        _snack('❌ Firestore (${e.code}): ${e.message ?? e}');
+        _snack(CrearViajeErrores.traducir(e));
       }
     } on StateError catch (e) {
       if (mounted) {
@@ -1248,7 +1954,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       }
     } catch (e) {
       if (mounted) {
-        _snack('Error: $e');
+        _snack(CrearViajeErrores.traducir(e));
       }
     } finally {
       if (mounted && !navegoFuera) {
@@ -1281,24 +1987,24 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
   }) {
     final bool mockupLayout = !legacyRutaCampos;
 
-    return _btnLugar(
+    return _campoLugarIntegrado(
       label: 'Destino',
+      hint: 'Barrio, calle, hotel, aeropuerto…',
       value: _destino?.label,
+      esOrigen: false,
+      campoMapa: _CampoRutaMapa.destino,
+      fallbackLabel: 'Destino final',
       estilo: estiloDestino,
       visual: _RutaCampoVisual.destino,
       legacyRutaCampos: legacyRutaCampos,
       mockupLayoutCampo: mockupLayout,
-      onTap: () async {
-        final _LugarSel? sel = await _buscarLugar('Elige el destino');
-        if (!mounted || sel == null) return;
-        setState(() => _destino = _lugarNormalizado(sel, fallbackLabel: 'Destino final'));
-        _programarCalculoAutomatico();
-      },
     );
   }
 
   bool get _mostrarResumenMulti =>
-      _vistaResumenCotizada && _precio > 0 && !_cargando;
+      _vistaResumenCotizada &&
+      _precioCotizadoValidoParaValor(_precio) &&
+      !_cargando;
 
   void _abrirFormularioCompletoMulti() {
     setState(() => _vistaResumenCotizada = false);
@@ -1377,7 +2083,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               ),
               const SizedBox(height: 4),
               Text(
-                _origen?.label ?? '',
+                _etiquetaOrigenResumen(),
                 style:
                     TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
               ),
@@ -1446,6 +2152,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                 textColor: textPrimary,
                 mutedColor: textMuted,
               ),
+              ClienteNegocioAliadoCotizacionBanner(eval: _negocioPromoEval),
               const SizedBox(height: 4),
               Text(
                 'TOTAL A PAGAR',
@@ -1594,20 +2301,18 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         ),
         ParpadeoRutaProgramar(
           pulseColor: estiloOrigen.acento,
-          child: _btnLugar(
+          child: _campoLugarIntegrado(
             label: 'Punto de partida',
+            hint: 'Escribe origen o tocá el mapa…',
             value: _origen?.label,
+            esOrigen: true,
+            campoMapa: _CampoRutaMapa.origen,
+            fallbackLabel: 'Origen',
             estilo: estiloOrigen,
             visual:
                 rutaMockup ? _RutaCampoVisual.origen : _RutaCampoVisual.parada,
             legacyRutaCampos: false,
             mockupLayoutCampo: rutaMockup,
-            onTap: () async {
-              final _LugarSel? sel = await _buscarLugar('Elige el origen');
-              if (!mounted || sel == null) return;
-              setState(() => _origen = _lugarNormalizado(sel, fallbackLabel: 'Origen'));
-              _programarCalculoAutomatico();
-            },
           ),
         ),
         if (rutaMockup)
@@ -1629,25 +2334,18 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Expanded(
-                  child: _btnLugar(
+                  child: _campoLugarIntegrado(
                     label: 'Parada ${i + 1}',
+                    hint: 'Dirección de la parada ${i + 1}…',
                     value: val?.label,
+                    esOrigen: false,
+                    campoMapa: _CampoRutaMapa.parada,
+                    paradaIndex: i,
+                    fallbackLabel: 'Parada ${i + 1}',
                     estilo: estiloParada,
                     visual: _RutaCampoVisual.parada,
                     legacyRutaCampos: false,
                     mockupLayoutCampo: rutaMockup,
-                    onTap: () async {
-                      final _LugarSel? sel =
-                          await _buscarLugar('Elige la parada ${i + 1}');
-                      if (!mounted || sel == null) return;
-                      setState(
-                        () => _paradas[i] = _lugarNormalizado(
-                          sel,
-                          fallbackLabel: 'Parada ${i + 1}',
-                        ),
-                      );
-                      _programarCalculoAutomatico();
-                    },
                   ),
                 ),
                 SizedBox(width: rutaMockup ? 6 : 4),
@@ -1710,8 +2408,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
         BotonAccionDestacadoHoja(
           onPressed: _paradas.length < _kMaxParadasIntermedias
               ? () {
+                  final int nuevoIdx = _paradas.length;
                   setState(() => _paradas.add(null));
-                  _programarCalculoAutomatico();
+                  _onCampoRutaEnfocado(
+                    _CampoRutaMapa.parada,
+                    paradaIndex: nuevoIdx,
+                  );
                 }
               : null,
           icon: Icons.add_location_alt_rounded,
@@ -1754,6 +2456,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
 
     return FlygoSalidaSegura(
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         backgroundColor: isDark ? Colors.black : const Color(0xFFE8EAED),
         appBar: const RaiAppBar(
           title: 'Múltiples paradas',
@@ -1766,15 +2469,255 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             Expanded(
               child: Stack(
                 children: <Widget>[
-                  ListView(
-            controller: _listaScroll,
-            padding: const EdgeInsets.all(16),
-            children: <Widget>[
-              if (_necesitaAlertaUbicacionMulti)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: RaiUbicacionClienteMapAlert(),
-                ),
+                  Positioned.fill(
+                    child: GoogleMap(
+                      padding: _multiMapPadding(context),
+                      initialCameraPosition: CameraPosition(
+                        target: _mapCentro ??
+                            const LatLng(18.4861, -69.9312),
+                        zoom: _mapCentro != null ? 13 : 11,
+                      ),
+                      markers: _mapMarkers,
+                      polylines: _mapPolylines,
+                      myLocationEnabled: true,
+                      myLocationButtonEnabled: false,
+                      zoomControlsEnabled: false,
+                      zoomGesturesEnabled: true,
+                      scrollGesturesEnabled: true,
+                      rotateGesturesEnabled: false,
+                      tiltGesturesEnabled: false,
+                      mapToolbarEnabled: false,
+                      compassEnabled: true,
+                      onMapCreated: (GoogleMapController c) {
+                        _map = c;
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          unawaited(_ajustarCamaraMapaMultiparada());
+                        });
+                      },
+                      onLongPress: _onLongPressMapMulti,
+                      onTap: (LatLng p) {
+                        if (_mapProgrammaticCameraDepth > 0) return;
+                        _onMultiMapUserGesture();
+                        _multiMapGestureEndDebounce?.cancel();
+                        if (_puedeElegirDestinoEnMapa()) {
+                          unawaited(_aplicarPuntoDesdeMapa(p));
+                        }
+                        _multiMapGestureEndDebounce = Timer(
+                          const Duration(milliseconds: 420),
+                          () {
+                            if (mounted) {
+                              _expandMultiSheetTrasMapaInteract();
+                            }
+                          },
+                        );
+                      },
+                      onCameraMoveStarted: _onMultiMapUserGesture,
+                      onCameraIdle: _onMultiMapCameraIdle,
+                    ),
+                  ),
+                  if (_necesitaAlertaUbicacionMulti)
+                    Positioned(
+                      top: 8,
+                      left: 16,
+                      right: 16,
+                      child: const RaiUbicacionClienteMapAlert(),
+                    )
+                  else if (_resolviendoDestinoMapa)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 8,
+                      left: 16,
+                      right: 16,
+                      child: Material(
+                        color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                        borderRadius: BorderRadius.circular(12),
+                        elevation: 4,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          child: Row(
+                            children: <Widget>[
+                              Icon(
+                                Icons.place_rounded,
+                                color: Color(0xFF49F18B),
+                                size: 22,
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Obteniendo dirección del punto…',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  else if (_mensajeSeleccionMapaActiva != null)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 8,
+                      left: 16,
+                      right: 16,
+                      child: Material(
+                        color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                        borderRadius: BorderRadius.circular(12),
+                        elevation: 4,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          child: Row(
+                            children: <Widget>[
+                              const Icon(
+                                Icons.touch_app_rounded,
+                                color: Color(0xFFFF5A00),
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _mensajeSeleccionMapaActiva!,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  else if (_origen != null && _destino == null)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 8,
+                      left: 16,
+                      right: 16,
+                      child: Material(
+                        color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                        borderRadius: BorderRadius.circular(12),
+                        elevation: 4,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          child: Row(
+                            children: <Widget>[
+                              const Icon(
+                                Icons.touch_app_rounded,
+                                color: Color(0xFFFF5A00),
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _paradas.length > 1 ||
+                                          _paradas
+                                              .whereType<_LugarSel>()
+                                              .isNotEmpty
+                                      ? 'Tocá el mapa para marcar la siguiente parada o el destino'
+                                      : 'Tocá el mapa para marcar el destino final',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    right: 14,
+                    top: 8,
+                    child: FloatingActionButton.small(
+                      heroTag: 'multi_paradas_centrar',
+                      backgroundColor: isDark
+                          ? const Color(0xFF1E1E1E)
+                          : Colors.white,
+                      onPressed: () =>
+                          unawaited(_ajustarCamaraMapaMultiparada()),
+                      child: Icon(
+                        Icons.my_location_rounded,
+                        color: isDark
+                            ? _colorServicio
+                            : const Color(0xFF0F9D58),
+                      ),
+                    ),
+                  ),
+                  DraggableScrollableSheet(
+                    controller: _sheetCtrl,
+                    minChildSize: _sheetMinFracMulti,
+                    maxChildSize: 0.88,
+                    initialChildSize:
+                        _mostrarResumenMulti ? 0.56 : 0.38,
+                    snap: true,
+                    snapSizes: const <double>[
+                      _sheetMinFracMulti,
+                      0.42,
+                      0.56,
+                      0.75,
+                    ],
+                    builder: (BuildContext ctx, ScrollController scrollController) {
+                      final double safeBottom =
+                          MediaQuery.paddingOf(ctx).bottom;
+                      final double kbInset =
+                          MediaQuery.viewInsetsOf(ctx).bottom;
+                      final Color sheetBg =
+                          isDark ? const Color(0xFF0F1115) : Colors.white;
+                      return DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(24),
+                          ),
+                          color: sheetBg,
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.black
+                                  .withValues(alpha: isDark ? 0.38 : 0.12),
+                              blurRadius: 18,
+                              offset: const Offset(0, -4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            const SizedBox(height: 10),
+                            Center(
+                              child: Container(
+                                width: 44,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.white30
+                                      : const Color(0xFFD0D5DD),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: ListView(
+                                controller: scrollController,
+                                padding: EdgeInsets.fromLTRB(
+                                  16,
+                                  4,
+                                  16,
+                                  16 + safeBottom + kbInset,
+                                ),
+                                children: <Widget>[
               if (_cargando)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -2031,6 +2974,12 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                               style: TextStyle(color: textMuted, fontSize: 12),
                             ),
                           ),
+                        const SizedBox(height: 16),
+                        ClienteMetodoPagoSolicitudTiles(
+                          categoriaSeleccionada: _metodoPagoCategoria,
+                          onCategoriaChanged: _onMetodoPagoCategoriaChanged,
+                          fondoOscuro: true,
+                        ),
                         const SizedBox(height: 20),
                         SizedBox(
                           width: double.infinity,
@@ -2059,15 +3008,21 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     ),
                   ),
                 ],
+              ],
                 if (_cargando)
                   CotizacionPrecioLoadingPlaceholder(
                     accentColor: _colorServicio,
                     isDark: isDark,
                     message: _precio > 0 ? 'Procesando…' : 'Calculando precio…',
                   ),
-              ],
-            ],
-          ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                   if (_cargando && _mensajeCarga.isNotEmpty)
                     Positioned.fill(
                       child: CotizacionPrecioLoadingDimmed(
@@ -2352,7 +3307,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      empty ? 'Toca para buscar en el mapa…' : value!,
+                      empty ? 'Toca para elegir dirección…' : value!,
                       style: estiloSubCampo,
                     ),
                   ],
@@ -2377,7 +3332,7 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
                     Text(label, style: estiloTituloCampo),
                     const SizedBox(height: 6),
                     Text(
-                      empty ? 'Toca para buscar en el mapa…' : value!,
+                      empty ? 'Toca para elegir dirección…' : value!,
                       style: estiloSubCampo,
                     ),
                   ],
@@ -2402,86 +3357,6 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
             boxShadow: shadows,
           ),
           child: contenidoFila,
-        ),
-      ),
-    );
-  }
-}
-
-// ---------- BottomSheet de búsqueda (mic + RAI vía CampoLugarAutocomplete) ----------
-class _BuscarLugarSheet extends StatelessWidget {
-  final String titulo;
-  const _BuscarLugarSheet({required this.titulo});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDestino = titulo.contains('Destino');
-    final mq = MediaQuery.of(context);
-    final kb = mq.viewInsets.bottom;
-    final sh = mq.size.height;
-    final pad = mq.padding;
-    final panelH = math
-        .min(
-          sh * 0.62,
-          sh - kb - pad.top - pad.bottom - 12,
-        )
-        .clamp(260.0, sh);
-
-    return AnimatedPadding(
-      padding: EdgeInsets.only(bottom: kb),
-      duration: const Duration(milliseconds: 120),
-      curve: Curves.easeOut,
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: panelH,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const SizedBox(height: 14),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  titulo,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                  child: CampoLugarAutocomplete(
-                    label: isDestino ? 'Buscar destino' : 'Buscar origen',
-                    hint: isDestino
-                        ? 'Barrio, calle, hotel, aeropuerto…'
-                        : 'Dirección o referencia…',
-                    country: 'DO',
-                    asistenteDireccionHabilitado: true,
-                    fieldAccent: Colors.greenAccent,
-                    fieldFill: const Color(0xFF1A1A1A),
-                    fieldTextColor: Colors.white,
-                    fieldHintColor: Colors.white54,
-                    fieldLabelColor: Colors.white70,
-                    onPlaceSelected: (det) {
-                      Navigator.pop(
-                        context,
-                        _LugarSel(
-                          label: MultiparadaRutaHelper.normalizarLabel(
-                            det.displayLabel,
-                            isDestino ? 'Destino' : 'Ubicación',
-                          ),
-                          lat: MultiparadaRutaHelper.round6(det.lat),
-                          lon: MultiparadaRutaHelper.round6(det.lon),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );

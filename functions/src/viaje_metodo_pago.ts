@@ -5,7 +5,6 @@ import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logger } from "firebase-functions";
 
-import { getFinanceConfig } from "./finance.js";
 import { metodoPagoNormalizadoDesde } from "./liquidacion_semanal_viaje.js";
 
 type AnyMap = Record<string, unknown>;
@@ -28,8 +27,9 @@ function viajeTarjetaSinCobrar(d: AnyMap): boolean {
   return ep !== "verificado" && ps !== "captured";
 }
 
-function normalizeEstadoViajeDoc(raw: unknown): string {
+export function normalizeEstadoViajeDoc(raw: unknown): string {
   const s = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (s === "asignado") return "aceptado";
   if (s === "encurso" || s === "en_curso" || s === "en_curzo") return "en_curso";
   if (
     s === "a_bordo" ||
@@ -53,9 +53,27 @@ function normalizeEstadoViajeDoc(raw: unknown): string {
   return s;
 }
 
-function estadoPermiteCambioMetodoPago(estadoNorm: string, completado: boolean): boolean {
+/**
+ * Debe coincidir con `_mostrarSelectorMetodoPagoCliente` en la app: si la UI
+ * ofrece el cambio y el servidor lo rechaza, el cliente ve que su elección
+ * "vuelve atrás" sola. Quien llama ya exigió conductor asignado.
+ */
+export function estadoPermiteCambioMetodoPago(
+  estadoNorm: string,
+  completado: boolean,
+  aceptado = false,
+): boolean {
   if (completado || estadoNorm === "completado") return false;
-  if (estadoNorm === "cancelado" || estadoNorm === "cancelled") return false;
+  if (
+    estadoNorm === "cancelado" ||
+    estadoNorm === "cancelled" ||
+    estadoNorm === "rechazado"
+  ) {
+    return false;
+  }
+  // Turismo / asignación por administración dejan el doc en `pendiente_admin`
+  // con `aceptado: true`: para la app y para el cobro ese viaje ya está activo.
+  if (aceptado) return true;
   return (
     estadoNorm === "aceptado" ||
     estadoNorm === "en_camino_pickup" ||
@@ -83,16 +101,6 @@ export const actualizarMetodoPagoViaje = onCall(async (request) => {
   if (metodoRaw !== "efectivo" && metodoRaw !== "transferencia" && metodoRaw !== "tarjeta") {
     throw new HttpsError("invalid-argument", "Método de pago inválido.");
   }
-  if (metodoRaw === "tarjeta") {
-    const financeCfg = await getFinanceConfig();
-    if (!financeCfg.pagosConTarjetaAzulHabilitados) {
-      throw new HttpsError(
-        "failed-precondition",
-        "El pago con tarjeta no está habilitado en este momento.",
-      );
-    }
-  }
-
   const db = getFirestore();
   const viajeRef = db.collection("viajes").doc(viajeId);
   const snap = await viajeRef.get();
@@ -121,23 +129,29 @@ export const actualizarMetodoPagoViaje = onCall(async (request) => {
 
   const completado = d.completado === true;
   const estadoNorm = normalizeEstadoViajeDoc(d.estado);
-  if (!estadoPermiteCambioMetodoPago(estadoNorm, completado)) {
+  if (!estadoPermiteCambioMetodoPago(estadoNorm, completado, d.aceptado === true)) {
     throw new HttpsError(
       "failed-precondition",
       "Solo podés elegir el pago con el viaje activo.",
     );
   }
 
+  const metodoViaje = metodoLabel(metodoRaw);
   const metodoActual = metodoPagoNormalizadoDesde(d);
-  if (metodoActual === metodoRaw) {
-    return { ok: true, viajeId, metodoPago: metodoLabel(metodoRaw) };
+  const yaEnMetodo = metodoActual === metodoRaw;
+  // Docs viejos pueden traer `metodoPago` y `metodoPagoNormalizado` en desacuerdo:
+  // ahí hay que reescribir igual, o el cliente elige y nada cambia.
+  if (yaEnMetodo && String(d.metodoPago ?? "").trim() === metodoViaje) {
+    return { ok: true, viajeId, metodoPago: metodoViaje, sinCambios: true };
   }
 
   if (metodoEsTarjeta(d.metodoPago) && !viajeTarjetaSinCobrar(d)) {
+    if (yaEnMetodo) {
+      return { ok: true, viajeId, metodoPago: metodoViaje, sinCambios: true };
+    }
     throw new HttpsError("failed-precondition", "La tarjeta ya fue cobrada.");
   }
 
-  const metodoViaje = metodoLabel(metodoRaw);
   const now = FieldValue.serverTimestamp();
 
   await db.runTransaction(async (tx) => {

@@ -160,7 +160,7 @@
     "rewrites": [
       {
         "source": "/pool",
-        "destination": "/pool/index.html"
+        "function": "poolShareLanding"
       },
       {
         "source": "/pool/**",

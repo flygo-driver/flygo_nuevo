@@ -22,13 +22,15 @@ service firebase.storage {
         );
     }
 
-    /* ========= AVATARES =========
-       Ruta: perfiles/{uid}/avatar_*.jpg
-       Lectura: cualquiera autenticado
+    /* ========= AVATARES Y SELFIE DE VERIFICACIÓN =========
+       Rutas: perfiles/{uid}/avatar_*.jpg  y  perfiles/{uid}/verificacion_*.jpg
+       Avatar: lo lee cualquier autenticado (el pasajero ve la foto del chofer).
+       Selfie: dato biométrico, solo el dueño y el admin que la revisa.
        Escritura: solo el dueño, máx 5MB, solo imagen
     */
     match /perfiles/{uid}/{fileName} {
-      allow read: if signedIn();
+      allow read: if signedIn() && !fileName.matches('verificacion_.*');
+      allow read: if isOwner(uid) || isAdminStorage();
       allow write: if isOwner(uid)
                    && request.resource != null
                    && request.resource.size < 5 * 1024 * 1024

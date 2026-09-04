@@ -36,6 +36,21 @@ async function googlePlacesGet(
   return (await res.json()) as AnyMap;
 }
 
+function normalizeCountryCode(raw: unknown): string {
+  const c = str(raw).toLowerCase();
+  if (!c) return "do";
+  if (
+    c === "do" ||
+    c === "rd" ||
+    c.includes("dominic") ||
+    c.includes("república") ||
+    c.includes("republica")
+  ) {
+    return "do";
+  }
+  return c.length === 2 ? c : "do";
+}
+
 /** Autocomplete estilo Google (calles, POI, barrios en RD). */
 export const placesAutocomplete = onCall(
   { region: "us-central1", cors: true },
@@ -44,13 +59,13 @@ export const placesAutocomplete = onCall(
       throw new HttpsError("unauthenticated", "No autenticado");
     }
     const input = str(request.data?.input);
-    if (input.length < 2) {
+    if (input.length < 1) {
       return { status: "OK", predictions: [] as AnyMap[] };
     }
 
     const params: Record<string, string> = { input };
-    const country = str(request.data?.country || "do").toLowerCase();
-    if (country) params.components = `country:${country}`;
+    const country = normalizeCountryCode(request.data?.country);
+    params.components = `country:${country}`;
 
     const sessiontoken = str(request.data?.sessiontoken);
     if (sessiontoken) params.sessiontoken = sessiontoken;
@@ -59,8 +74,11 @@ export const placesAutocomplete = onCall(
     const biasLon = Number(request.data?.biasLon);
     if (Number.isFinite(biasLat) && Number.isFinite(biasLon)) {
       params.location = `${biasLat},${biasLon}`;
-      params.radius = "200000";
+      params.radius = "150000";
       params.origin = `${biasLat},${biasLon}`;
+    } else {
+      params.location = "18.7357,-70.1627";
+      params.radius = "180000";
     }
 
     try {
@@ -115,6 +133,38 @@ export const placesDetails = onCall(
   },
 );
 
+/** Reverse geocoding (cualquier punto del mapa → dirección Google). */
+export const placesReverseGeocode = onCall(
+  { region: "us-central1", cors: true },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "No autenticado");
+    }
+    const lat = Number(request.data?.lat);
+    const lon = Number(request.data?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new HttpsError("invalid-argument", "Faltan coordenadas");
+    }
+
+    const params: Record<string, string> = {
+      latlng: `${lat},${lon}`,
+      language: "es",
+    };
+
+    try {
+      const json = await googlePlacesGet("/maps/api/geocode/json", params);
+      return {
+        status: str(json.status) || "UNKNOWN",
+        results: Array.isArray(json.results) ? json.results : [],
+      };
+    } catch (e) {
+      if (e instanceof HttpsError) throw e;
+      logger.error("placesReverseGeocode", e);
+      throw new HttpsError("internal", "Error en reverse geocode");
+    }
+  },
+);
+
 /** Find Place From Text — fallback de geocoding en web/laptop. */
 export const placesFindFromText = onCall(
   { region: "us-central1", cors: true },
@@ -123,7 +173,7 @@ export const placesFindFromText = onCall(
       throw new HttpsError("unauthenticated", "No autenticado");
     }
     const input = str(request.data?.input);
-    if (input.length < 2) {
+    if (input.length < 1) {
       return { status: "ZERO_RESULTS", candidates: [] as AnyMap[] };
     }
 
@@ -132,10 +182,17 @@ export const placesFindFromText = onCall(
       inputtype: "textquery",
       fields: "place_id,name,formatted_address,geometry",
     };
-    const country = str(request.data?.country || "do").toLowerCase();
+    const country = normalizeCountryCode(request.data?.country);
+    const biasLat = Number(request.data?.biasLat);
+    const biasLon = Number(request.data?.biasLon);
+    if (Number.isFinite(biasLat) && Number.isFinite(biasLon)) {
+      params.locationbias = `circle:120000@${biasLat},${biasLon}`;
+    } else {
+      // Sesgo centro RD (Santo Domingo) para resultados locales.
+      params.locationbias = "circle:180000@18.7357,-70.1627";
+    }
     if (country) {
-      // Sesgo RD (Santo Domingo) para resultados locales.
-      params.locationbias = "circle:120000@18.4861,-69.9312";
+      params.region = country;
     }
 
     try {

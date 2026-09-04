@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'package:flygo_nuevo/app_flavor.dart';
+import 'package:flygo_nuevo/utils/bola_ahorro_pool_isolation.dart';
 import 'package:flygo_nuevo/servicios/bola_nav_coordination_guard.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -36,6 +37,7 @@ class _BolaCancelacionListenerState extends State<BolaCancelacionListener> {
   }
 
   void _arrancar() {
+    if (BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) return;
     final User? u = FirebaseAuth.instance.currentUser;
     if (u == null) return;
     final String uid = u.uid.trim();

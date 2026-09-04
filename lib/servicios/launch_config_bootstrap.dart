@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 class LaunchConfigBootstrap {
   LaunchConfigBootstrap._();
 
-  static const int _version = 2;
+  static const int _version = 3;
   static bool _running = false;
   static bool _done = false;
 
@@ -18,7 +18,8 @@ class LaunchConfigBootstrap {
     'poolRecaudoSoloNuevasGiras': true,
     'poolLiquidacionAlFinalizar': true,
     'poolRecaudoAutoVerificarConciliacion': true,
-    'transferenciaRecaudoEnCuentaRai': true,
+    // Viajes taxi: cliente transfiere al taxista (no a RAI). Giras central usan recaudoModelo propio.
+    'transferenciaRecaudoEnCuentaRai': false,
     'transferenciaExigeVerificadoParaFinalizar': false,
     'conciliacionAutomaticaHabilitada': true,
   };

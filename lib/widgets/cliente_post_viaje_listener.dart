@@ -50,7 +50,6 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
   }
 
   void _arrancar(User u) {
-
     final Query<Map<String, dynamic>> q = FirebaseFirestore.instance
         .collection('viajes')
         .where(
@@ -64,9 +63,9 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
         .limit(1);
 
     _subCompletados = q.snapshots().listen(
-      _onViajesCompletadosSnap,
-      onError: (_) {},
-    );
+          _onViajesCompletadosSnap,
+          onError: (_) {},
+        );
 
     _subUsuario = FirebaseFirestore.instance
         .collection('usuarios')
@@ -82,8 +81,7 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
 
   bool _viajeCompletado(Map<String, dynamic> d) {
     if (d['completado'] != true) return false;
-    final String st =
-        EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
     return st == EstadosViaje.completado || d['completado'] == true;
   }
 
@@ -97,10 +95,10 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
     return DateTime.now().difference(dt).inSeconds <= segundos;
   }
 
-  Future<void> _onUsuarioSnap(DocumentSnapshot<Map<String, dynamic>> snap) async {
+  Future<void> _onUsuarioSnap(
+      DocumentSnapshot<Map<String, dynamic>> snap) async {
     if (!mounted) return;
-    final String vid =
-        (snap.data()?['viajeActivoId'] ?? '').toString().trim();
+    final String vid = (snap.data()?['viajeActivoId'] ?? '').toString().trim();
     if (vid.isNotEmpty) {
       _ultimoViajeActivoId = vid;
       return;
@@ -159,7 +157,8 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       );
       return;
     }
-    if (await ClientePostViajeReopenGuard.shouldSuppressAsync(id, viajeData: d)) {
+    if (await ClientePostViajeReopenGuard.shouldSuppressAsync(id,
+        viajeData: d)) {
       return;
     }
     if (!mounted) return;
@@ -189,7 +188,7 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
       if (nav == null) return;
 
       if (!nav.mounted) return;
-      ActiveTripService.cancelarMantenimientoOverlayViaje();
+      ActiveTripService.prepararSalidaClientePostViaje(viajeId: viajeId);
       ClientePostViajeReopenGuard.markOpened(viajeId);
       await PostViajeClienteNav.abrirFacturaYFlujo(
         viajeId: viajeId,

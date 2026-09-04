@@ -75,7 +75,7 @@ async function cargarConfig(db) {
   if (pct <= 0) pct = 20;
   return {
     minimoOperativoRd: num(prep.minimoOperativoRd) || MIN_SALDO_PREPAGO_RD,
-    permitirViajeConPrepagoParcial: prep.permitirViajeConPrepagoParcial !== false,
+    permitirViajeConPrepagoParcial: prep.permitirViajeConPrepagoParcial === true,
     comisionPct: pct,
   };
 }

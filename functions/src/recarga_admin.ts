@@ -4,6 +4,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { logAdminAudit } from "./audit.js";
 import { syncTaxistaBloqueoOperativo } from "./finance.js";
 import { acreditarRecargaPrepagoEnTx } from "./recarga_prepago_credit.js";
+import { enviarPushUid } from "./corporativo_notificaciones.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -25,6 +26,49 @@ async function getRole(uid: string): Promise<string> {
 async function assertAdmin(uid: string): Promise<void> {
   const role = await getRole(uid);
   if (role !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+}
+
+/** Aviso al chofer; nunca debe tumbar la aprobación/rechazo. */
+async function notificarTaxistaRecarga(args: {
+  uidTaxista: string;
+  recargaId: string;
+  aprobada: boolean;
+  montoRd?: number;
+  notaAdmin?: string;
+}): Promise<void> {
+  const uid = args.uidTaxista.trim();
+  if (!uid) return;
+  const monto = Number(args.montoRd ?? 0);
+  const titulo = args.aprobada ? "Recarga aprobada" : "Recarga rechazada";
+  const cuerpo = args.aprobada
+    ? `Se acreditó RD$${monto.toFixed(0)} a tu prepago de comisión. Ya podés seguir operando.`
+    : `Tu recarga no fue aprobada. ${args.notaAdmin ?? "Revisá el comprobante y volvé a enviarlo."}`;
+  try {
+    await enviarPushUid(uid, titulo, cuerpo, {
+      tipo: args.aprobada ? "recarga_aprobada" : "recarga_rechazada",
+      recargaId: args.recargaId,
+    });
+  } catch (e) {
+    console.error("[notificarTaxistaRecarga]", args.recargaId, e);
+  }
+}
+
+/**
+ * Reconciliar el bloqueo operativo es parte del resultado: si falla, el chofer
+ * queda bloqueado con saldo acreditado, así que se registra y se reintenta una vez.
+ */
+async function reconciliarBloqueoTaxista(uidTaxista: string): Promise<boolean> {
+  const uid = uidTaxista.trim();
+  if (!uid) return true;
+  for (let intento = 0; intento < 2; intento++) {
+    try {
+      await syncTaxistaBloqueoOperativo(uid);
+      return true;
+    } catch (e) {
+      console.error("[reconciliarBloqueoTaxista]", uid, intento, e);
+    }
+  }
+  return false;
 }
 
 export const approveRecargaComision = onCall(async (request) => {
@@ -63,23 +107,32 @@ export const approveRecargaComision = onCall(async (request) => {
     }
   });
 
-  if (uidTaxista) {
-    await syncTaxistaBloqueoOperativo(uidTaxista);
-  }
+  // Aunque sea un reintento: el bloqueo pudo quedar desincronizado antes.
+  const bloqueoReconciliado = await reconciliarBloqueoTaxista(uidTaxista);
+
+  // Auditar también los reintentos idempotentes: deja rastro de quién reintentó.
+  logAdminAudit({
+    action: "approve_recarga_comision",
+    actorUid,
+    resourceType: "recarga_comision_taxista",
+    resourceId: recargaId,
+    metadata: {
+      uidTaxista,
+      montoAcreditadoRd: Number(montoAcreditado.toFixed(2)),
+      abonoComisionLegacyRd: Number(abonoComisionLegacyRd.toFixed(2)),
+      saldoPrepagoIncrementoRd: Number(saldoPrepagoIncrementoRd.toFixed(2)),
+      notaAdminLen: notaAdmin.length,
+      reintentoIdempotente: yaEstabaPagada,
+      bloqueoReconciliado,
+    },
+  });
 
   if (!yaEstabaPagada) {
-    logAdminAudit({
-      action: "approve_recarga_comision",
-      actorUid,
-      resourceType: "recarga_comision_taxista",
-      resourceId: recargaId,
-      metadata: {
-        uidTaxista,
-        montoAcreditadoRd: Number(montoAcreditado.toFixed(2)),
-        abonoComisionLegacyRd: Number(abonoComisionLegacyRd.toFixed(2)),
-        saldoPrepagoIncrementoRd: Number(saldoPrepagoIncrementoRd.toFixed(2)),
-        notaAdminLen: notaAdmin.length,
-      },
+    await notificarTaxistaRecarga({
+      uidTaxista,
+      recargaId,
+      aprobada: true,
+      montoRd: montoAcreditado,
     });
   }
 
@@ -91,6 +144,7 @@ export const approveRecargaComision = onCall(async (request) => {
     abonoComisionLegacyRd: Number(abonoComisionLegacyRd.toFixed(2)),
     saldoPrepagoIncrementoRd: Number(saldoPrepagoIncrementoRd.toFixed(2)),
     alreadyApproved: yaEstabaPagada,
+    bloqueoReconciliado,
   };
 });
 
@@ -106,18 +160,23 @@ export const rejectRecargaComision = onCall(async (request) => {
 
   const recRef = db().collection("recargas_comision_taxista").doc(recargaId);
   let uidTaxista = "";
+  let yaEstabaRechazada = false;
 
   await db().runTransaction(async (tx) => {
     const recSnap = await tx.get(recRef);
     if (!recSnap.exists) throw new HttpsError("not-found", "Recarga no encontrada");
     const m = (recSnap.data() ?? {}) as AnyMap;
+    // Se lee siempre: sin uid no se puede reconciliar el bloqueo ni auditar.
+    uidTaxista = String(m.uidTaxista ?? "").trim();
     const estado = String(m.estado ?? "").trim().toLowerCase();
-    if (estado === "rechazado") return;
+    if (estado === "rechazado") {
+      yaEstabaRechazada = true;
+      return;
+    }
     if (estado === "pagado") throw new HttpsError("failed-precondition", "Recarga ya aprobada");
     if (estado !== "pendiente_verificacion") {
       throw new HttpsError("failed-precondition", "Recarga no está pendiente de verificación");
     }
-    uidTaxista = String(m.uidTaxista ?? "").trim();
     tx.update(recRef, {
       estado: "rechazado",
       notaAdmin,
@@ -127,9 +186,7 @@ export const rejectRecargaComision = onCall(async (request) => {
     });
   });
 
-  if (uidTaxista) {
-    await syncTaxistaBloqueoOperativo(uidTaxista);
-  }
+  const bloqueoReconciliado = await reconciliarBloqueoTaxista(uidTaxista);
 
   logAdminAudit({
     action: "reject_recarga_comision",
@@ -139,8 +196,25 @@ export const rejectRecargaComision = onCall(async (request) => {
     metadata: {
       uidTaxista,
       notaAdminLen: notaAdmin.length,
+      reintentoIdempotente: yaEstabaRechazada,
+      bloqueoReconciliado,
     },
   });
 
-  return { ok: true, recargaId, uidTaxista };
+  if (!yaEstabaRechazada) {
+    await notificarTaxistaRecarga({
+      uidTaxista,
+      recargaId,
+      aprobada: false,
+      notaAdmin,
+    });
+  }
+
+  return {
+    ok: true,
+    recargaId,
+    uidTaxista,
+    alreadyRejected: yaEstabaRechazada,
+    bloqueoReconciliado,
+  };
 });

@@ -9,26 +9,65 @@ void main() {
     final r = TarifasTramosCalculo.calcular(
       distanciaKm: 12,
       baseRd: 50,
-      porKmLocal: 25,
+      porKmLocal: 22,
       minimoLocalRd: 150,
       tramos: tramos,
       claveVehiculo: 'Carro',
     );
-    expect(r.nucleoRd, 350);
+    expect(r.nucleoRd, 314);
     expect(r.desglose['esLargaDistancia'], false);
+  });
+
+  test('viaje corto bajo 2 km aplica minimo 150', () {
+    final r = TarifasTramosCalculo.calcular(
+      distanciaKm: 1.5,
+      baseRd: 50,
+      porKmLocal: 22,
+      minimoLocalRd: 150,
+      tramos: tramos,
+      claveVehiculo: 'Carro',
+    );
+    expect(r.nucleoRd, 150);
+    expect(r.desglose['minimoAplicadoRd'], 150);
+  });
+
+  test('viaje desde 2 km aplica minimo 175', () {
+    final r = TarifasTramosCalculo.calcular(
+      distanciaKm: 2,
+      baseRd: 50,
+      porKmLocal: 22,
+      minimoLocalRd: 150,
+      tramos: tramos,
+      claveVehiculo: 'Carro',
+    );
+    expect(r.nucleoRd, 175);
+    expect(r.desglose['minimoAplicadoRd'], 175);
+  });
+
+  test('viaje 3 km sube al minimo 175 si calculo queda bajo', () {
+    final r = TarifasTramosCalculo.calcular(
+      distanciaKm: 3,
+      baseRd: 50,
+      porKmLocal: 22,
+      minimoLocalRd: 150,
+      tramos: tramos,
+      claveVehiculo: 'Carro',
+    );
+    expect(r.nucleoRd, 175);
+    expect(r.desglose['minimoAplicadoRd'], 175);
   });
 
   test('viaje 165 km aplica tramo 140+ sin tope artificial', () {
     final r = TarifasTramosCalculo.calcular(
       distanciaKm: 165,
       baseRd: 50,
-      porKmLocal: 25,
+      porKmLocal: 22,
       minimoLocalRd: 150,
       tramos: tramos,
       claveVehiculo: 'Carro',
     );
     expect(r.desglose['esLargaDistancia'], true);
-    expect(r.nucleoRd, greaterThan(8000));
+    expect(r.nucleoRd, greaterThan(7000));
     final lineas = r.desglose['lineas'] as List;
     expect(lineas.length, 4);
     final ultima = lineas.last as Map;
@@ -39,7 +78,7 @@ void main() {
     final r = TarifasTramosCalculo.calcular(
       distanciaKm: 250,
       baseRd: 50,
-      porKmLocal: 25,
+      porKmLocal: 22,
       minimoLocalRd: 150,
       tramos: tramos,
       claveVehiculo: 'Carro',

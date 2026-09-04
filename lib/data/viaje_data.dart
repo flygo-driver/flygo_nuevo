@@ -1218,33 +1218,8 @@ class ViajeData {
     });
   }
 
-  static Future<void> iniciarViajeTx({
-    required String viajeId,
-    required String uidTaxista,
-  }) async {
-    final DocumentReference<Map<String, dynamic>> ref = _viajes.doc(viajeId);
-    await _db.runTransaction((Transaction tx) async {
-      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
-      if (!snap.exists) throw Exception('El viaje no existe.');
-      final Map<String, dynamic> d = snap.data()!;
-      if ((d['uidTaxista'] ?? '') != uidTaxista) {
-        throw Exception('No autorizado');
-      }
-
-      final String estadoActual =
-          EstadosViaje.normalizar((d['estado'] ?? '').toString());
-      if (estadoActual != EstadosViaje.aBordo) {
-        throw Exception('Primero marca "Cliente a bordo".');
-      }
-
-      tx.update(ref, <String, dynamic>{
-        'estado': _estadoCanon(EstadosViaje.enCurso),
-        'inicioEnRutaEn': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      });
-    });
-  }
+  // `en_curso` solo lo escribe `iniciarViajeSeguro` tras validar el PIN: no hay
+  // versión local de esta transición.
 
   static Future<void> cancelarPorTaxistaYRepublicarTx({
     required String viajeId,

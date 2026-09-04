@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
+import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 
@@ -21,8 +22,9 @@ class TaxistaBolaViajeRetomarBanner extends StatelessWidget {
   }
 
   Future<void> _retomar(BuildContext context, String bolaId) async {
-    ActiveTripService.cancelarForzarInicioTaxistaShellBola();
-    ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
+    ActiveTripService.mantenerOverlayViajeEnShell(
+      ActiveTripService.kOverlayClienteViajeActivo,
+    );
     ActiveTripService.bloquearShellTaxistaTrasAceptar(
       const Duration(seconds: 90),
     );
@@ -37,54 +39,39 @@ class TaxistaBolaViajeRetomarBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!ActiveTripService.debeForzarInicioTaxistaShellBola) {
+    if (ActiveTripService.debeBloquearShellSinViajeTaxista ||
+        ActiveTripService.retomarTaxistaEnCurso ||
+        ActiveTripService.viajeOperativoTaxistaConocido.isNotEmpty) {
       return const SizedBox.shrink();
     }
-
-    final String bolaIdPausado =
-        ActiveTripService.bolaIdTaxistaPausado.trim();
-    if (bolaIdPausado.isEmpty) {
-      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('bolas_pueblo')
-            .where('uidTaxista', isEqualTo: uid)
-            .where('estado', whereIn: <String>['acordada', 'en_curso'])
-            .limit(1)
-            .snapshots(),
-        builder: (
-          BuildContext context,
-          AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap,
-        ) {
-          if (!snap.hasData || snap.data!.docs.isEmpty) {
-            return const SizedBox.shrink();
-          }
-          return _banner(
-            context,
-            bolaId: snap.data!.docs.first.id,
-            data: snap.data!.docs.first.data(),
-          );
-        },
-      );
-    }
-
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('bolas_pueblo')
-          .doc(bolaIdPausado)
+          .where('uidTaxista', isEqualTo: uid)
+          .where('estado', whereIn: <String>['acordada', 'en_curso'])
+          .limit(1)
           .snapshots(),
       builder: (
         BuildContext context,
-        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snap,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap,
       ) {
-        if (!snap.hasData || !snap.data!.exists) {
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
           return const SizedBox.shrink();
         }
-        final Map<String, dynamic> d = snap.data!.data() ?? {};
-        final String estado = (d['estado'] ?? '').toString().trim();
-        if (estado != 'acordada' && estado != 'en_curso') {
+        final QueryDocumentSnapshot<Map<String, dynamic>> doc =
+            snap.data!.docs.first;
+        if (!BolaPuebloRepo.visibleEnTablero(
+          doc.data(),
+          uid,
+          bolaId: doc.id,
+        )) {
           return const SizedBox.shrink();
         }
-        return _banner(context, bolaId: bolaIdPausado, data: d);
+        return _banner(
+          context,
+          bolaId: doc.id,
+          data: doc.data(),
+        );
       },
     );
   }

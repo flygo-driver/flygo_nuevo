@@ -39,6 +39,7 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   bool _cargandoRating = false;
   bool _salioDeCalificacion = false;
   bool _omitioCalificacionPorThrottle = false;
+  bool _salientoEnCurso = false;
   static const int _maxComentario = 280;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeSub;
@@ -90,18 +91,37 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
   }
 
   Future<void> _finalizarFlujo() async {
-    if (!mounted) {
+    if (_salientoEnCurso) return;
+    _salientoEnCurso = true;
+    if (mounted) setState(() {});
+    try {
+      if (mounted) {
+        final NavigatorState nav =
+            Navigator.of(context, rootNavigator: true);
+        if (nav.canPop()) {
+          nav.pop();
+        }
+      }
+      if (!mounted) {
+        await TaxistaColaPostCompletar.navegarTrasCompletar(
+          uidTaxista: widget.uidTaxista,
+          regresarAlPoolNormal: widget.regresarAlPoolNormal,
+          viajeIdCompletado: widget.viajeId,
+        );
+        return;
+      }
       await TaxistaColaPostCompletar.navegarTrasCompletar(
         uidTaxista: widget.uidTaxista,
         regresarAlPoolNormal: widget.regresarAlPoolNormal,
+        viajeIdCompletado: widget.viajeId,
       );
-      return;
+    } finally {
+      if (mounted) {
+        setState(() => _salientoEnCurso = false);
+      } else {
+        _salientoEnCurso = false;
+      }
     }
-    await TaxistaColaPostCompletar.navegarTrasCompletar(
-      context: context,
-      uidTaxista: widget.uidTaxista,
-      regresarAlPoolNormal: widget.regresarAlPoolNormal,
-    );
   }
 
   Future<void> _continuarDesdeResumen(Viaje v, Map<String, dynamic> d) async {
@@ -384,10 +404,21 @@ class _PostViajeTaxistaFlowState extends State<PostViajeTaxistaFlow> {
           ),
           const SizedBox(height: 28),
           FilledButton.icon(
-            onPressed: () => unawaited(_finalizarFlujo()),
-            icon: Icon(corp ? Icons.route_rounded : Icons.local_taxi_rounded),
+            onPressed: _salientoEnCurso ? null : () => unawaited(_finalizarFlujo()),
+            icon: _salientoEnCurso
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.black54,
+                    ),
+                  )
+                : Icon(corp ? Icons.route_rounded : Icons.local_taxi_rounded),
             label: Text(
-              corp ? 'Volver a Mis rutas' : 'Volver a recibir viajes',
+              _salientoEnCurso
+                  ? 'Volviendo al pool…'
+                  : (corp ? 'Volver a Mis rutas' : 'Volver a recibir viajes'),
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             style: FilledButton.styleFrom(

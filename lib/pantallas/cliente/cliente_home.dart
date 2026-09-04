@@ -19,8 +19,8 @@ class _ClienteHomeState extends State<ClienteHome> {
   @override
   void initState() {
     super.initState();
-    // El [ClienteShell] ya abre viaje en curso vía stream; no redirigir aquí
-    // (evita reabrir el viaje al tocar «Volver al inicio»).
+    // El [ClienteShell] abre viaje en curso vía overlay + stream; no redirigir
+    // desde aquí (evita reabrir el viaje al tocar «Volver al inicio»).
   }
 
   @override

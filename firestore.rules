@@ -41,11 +41,22 @@ service cloud.firestore {
         raw;
     }
 
+    /// App unificada: usuarios.rol puede ser "cliente" pero el perfil es chofer.
+    function choferOperativoEnPerfil() {
+      return myUserDocExists() &&
+        myUserDoc().data.registroTaxistaCompleto == true &&
+        (myUserDoc().data.documentosCompletos == true ||
+          myUserDoc().data.puedeRecibirViajes == true);
+    }
+
     function rolUsuarioSesion() {
-      let r = myRole();
-      return r != ""
-        ? normalizedRole(r)
-        : normalizedRole(roleFromRolesCollection(request.auth.uid));
+      let rolU = myRole() != "" ? normalizedRole(myRole()) : "";
+      let rolR = normalizedRole(roleFromRolesCollection(request.auth.uid));
+      return rolU == "taxista" || rolU == "admin" ? rolU :
+        rolR == "taxista" || rolR == "admin" ? rolR :
+        choferOperativoEnPerfil() ? "taxista" :
+        rolU != "" ? rolU :
+        rolR;
     }
 
     function myRole() {
@@ -116,18 +127,20 @@ service cloud.firestore {
     /// pueden pedir viaje en la app pasajero (Play unificado / mismo uid).
     function puedeCrearViajeComoCliente() {
       return isAuth() &&
+        !isAdmin() &&
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.clienteId == request.auth.uid &&
         request.resource.data.uidTaxista == "" &&
-        request.resource.data.taxistaId == "" &&
-        rolUsuarioSesion() != "admin";
+        request.resource.data.taxistaId == "";
     }
 
-    /// Pedido = solo cliente publica; Oferta «Voy para» = solo chofer publica.
+    /// Pedido = pasajero publica (app unificada: mismo uid puede ser chofer operativo).
+    /// Oferta «Voy para» = solo chofer publica.
     function bolaPuebloCreateRolTipoCoherente() {
       return (request.resource.data.tipo == "pedido" &&
-          rolUsuarioSesion() == "cliente" &&
-          request.resource.data.createdByRol == "cliente") ||
+          request.resource.data.createdByRol == "cliente" &&
+          request.resource.data.createdByUid == request.auth.uid &&
+          !isAdmin()) ||
         (request.resource.data.tipo == "oferta" &&
           esRolChoferEnSesion() &&
           (request.resource.data.createdByRol == "taxista" ||
@@ -167,14 +180,16 @@ service cloud.firestore {
       return e != "" ? e : (u.estadoDocumentos is string ? u.estadoDocumentos : "pendiente");
     }
 
-    /// Claim pool: registro + docs aprobados + contrato (paridad TaxistaEntry; no puedeRecibirViajes).
+    /// Claim pool: paridad app; `puedeRecibirViajes` cubre cuentas legacy habilitadas por ADM.
     function taxistaAptoParaClaimPool(uid) {
       let u = userDoc(uid).data;
-      return u.registroTaxistaCompleto == true &&
-        u.documentosCompletos == true &&
-        taxistaDocsEstadoDe(uid) == "aprobado" &&
-        u.contratoTaxistaAceptado == true &&
-        !(u.bloqueado == true);
+      return !(u.bloqueado == true) && (
+        (u.puedeRecibirViajes == true && taxistaDocsEstadoDe(uid) == "aprobado") ||
+        (u.registroTaxistaCompleto == true &&
+          (u.documentosCompletos == true || u.puedeRecibirViajes == true) &&
+          taxistaDocsEstadoDe(uid) == "aprobado" &&
+          u.contratoTaxistaAceptado == true)
+      );
     }
 
     function esViajeCorporativoDocData() {
@@ -220,10 +235,12 @@ service cloud.firestore {
         ]) &&
         request.resource.data.estado != "completado" &&
         request.resource.data.completado != true &&
+        viajeNoTocaPinProtegido() &&
+        // El modo informativo lo marca el backend: el chofer no puede activarlo
+        // en el mismo write con el que pasaría el viaje a `en_curso` sin PIN.
         (
           !(request.resource.data.estado in ["en_curso", "encurso"]) ||
-          resource.data.corporativoModoInformativo == true ||
-          request.resource.data.corporativoModoInformativo == true
+          resource.data.corporativoModoInformativo == true
         );
     }
 
@@ -238,6 +255,35 @@ service cloud.firestore {
         codigo.size() <= 32 &&
         exists(/databases/$(database)/documents/negocios_aliados/$(codigo)) &&
         get(/databases/$(database)/documents/negocios_aliados/$(codigo)).data.activo == true;
+    }
+
+    /// Viaje con QR de negocio aliado: el código debe ser el del propio perfil, y
+    /// el 6.º gratis solo si el contador del perfil (que únicamente sube el backend
+    /// al finalizar viajes pagados) ya alcanzó la meta y la promo sigue vigente.
+    function negocioAliadoViajePerfilRespalda(d) {
+      let u = get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+      let mismoCodigo = u.negocioReferidoCodigo is string &&
+        u.negocioReferidoCodigo == d.negocioAliadoCodigo;
+      let marcaGratis = ("negocioAliadoPromoGratis" in d) &&
+        d.negocioAliadoPromoGratis == true;
+      return mismoCodigo &&
+        (
+          !marcaGratis ||
+          (
+            u.negocioReferidoAt != null &&
+            u.negocioPromoVenceAt > request.time &&
+            u.negocioPromoContador is int &&
+            u.negocioPromoMxKM is int &&
+            u.negocioPromoContador >= u.negocioPromoMxKM &&
+            d.negocioAliadoDescuentoRd is number &&
+            d.negocioAliadoDescuentoRd <= 600
+          )
+        );
+    }
+
+    function viajeCreateNegocioAliadoOk() {
+      return !("negocioAliadoCodigo" in request.resource.data) ||
+        negocioAliadoViajePerfilRespalda(request.resource.data);
     }
 
     function usuarioSinReferidoQrPrevio() {
@@ -303,7 +349,25 @@ service cloud.firestore {
         "conciliacionId",
         "conciliacionEstado",
         "movimientoBancoEntradaId",
-        "elegibleLiquidacionSemanal"
+        "elegibleLiquidacionSemanal",
+        // Tarifa por tipo de vehículo: se fija al crear y solo el trigger la usa
+        // para cobrar el vehículo que de verdad recoge al cliente.
+        "tipoVehiculoSolicitado",
+        "preciosPorTipoVehiculoCents",
+        "precioAjustadoPorVehiculo",
+        "precioAjustadoPorVehiculoEn",
+        "precioAntesAjusteVehiculoCents",
+        "precioAjusteVehiculoSolicitado",
+        "precioAjusteVehiculoAsignado",
+        // Ida y vuelta: el tramo de regreso solo lo mueve la callable
+        // registrarRegresoIdaVuelta, nunca la app del chofer.
+        "precioSoloIdaCents",
+        "regresoPendiente",
+        "regresoEnCurso",
+        "regresoNoRealizado",
+        "regresoIniciadoEn",
+        "regresoCanceladoEn",
+        "precioAntesRegresoCanceladoCents"
       ];
     }
 
@@ -450,12 +514,77 @@ service cloud.firestore {
 
     // Dueno del viaje (cliente): no exige rol en usuarios/.
     // Algunos docs tienen uidCliente vacio pero clienteId valido (motor/pool): OR evita denegar por '' == uid.
+    // `resource == null`: get/listener justo tras crear (doc aún no visible) no debe dar permission-denied.
     function esDuenoClienteDelViaje() {
       return isAuth() && (
+        resource == null ||
         resource.data.uidCliente == request.auth.uid ||
         resource.data.clienteId == request.auth.uid ||
         resource.data.uid == request.auth.uid
       );
+    }
+
+    /// Chofer ya asignado al viaje (claim local o CF).
+    function esTaxistaAsignadoDelViaje() {
+      return isAuth() && (
+        resource.data.uidTaxista == request.auth.uid ||
+        resource.data.taxistaId == request.auth.uid
+      );
+    }
+
+    /// Navegación pickup / cliente a bordo. El PIN (`codigoVerificacion*`) es
+    /// autoritativo del backend: el chofer nunca lo escribe ni lo marca verificado.
+    function taxistaFlujoPickupAbordoOk() {
+      return esTaxistaAsignadoDelViaje() &&
+        viajeNoTocaCamposFinancierosProtegidos() &&
+        request.resource.data.estado in [
+          "en_camino_pickup", "enCaminoPickup", "a_bordo", "abordo"
+        ] &&
+        changedOnly([
+          "estado", "activo",
+          "clienteAbordo", "clienteAbordoEn",
+          "pickupConfirmadoEn",
+          "latTaxista", "lonTaxista", "driverLat", "driverLon",
+          "updatedAt", "actualizadoEn"
+        ]);
+    }
+
+    /// Campos que solo el backend (`iniciarViajeSeguro` / `confirmBoarding`) puede
+    /// escribir: verificación del PIN de abordaje.
+    function viajeCamposPinProtegidos() {
+      return [
+        "codigoVerificacion", "codigoVerificado", "codigoVerificadoEn",
+        "boardingPin", "boardingPinExpira", "boardingPinExpiresAt",
+        "codigoRespaldoViaje", "corporativoCodigoEsPeriodo",
+        "intentosCodigo", "codigoBloqueado"
+      ];
+    }
+
+    function viajeNoTocaPinProtegido() {
+      return !request.resource.data.diff(resource.data).changedKeys()
+        .hasAny(viajeCamposPinProtegidos());
+    }
+
+    /// `en_curso` solo lo escribe el backend: el inicio de viaje exige PIN validado
+    /// en `iniciarViajeSeguro` (normal, motor, multiparada, programado, Bola, corporativo).
+    function viajeNoPasaAEnCurso() {
+      return !(request.resource.data.estado in ["en_curso", "encurso"]);
+    }
+
+    /// Claim del pool: las apps ya instaladas siembran `codigoVerificacion` con
+    /// `codigoVerificado: false`, así que eso se tolera; lo que nunca se permite es
+    /// autoverificar el PIN ni tocar el resto de campos de abordaje.
+    function viajeClaimPinSinAutoverificar() {
+      return !request.resource.data.diff(resource.data).changedKeys().hasAny([
+          "codigoVerificadoEn",
+          "boardingPin", "boardingPinExpira", "boardingPinExpiresAt",
+          "codigoRespaldoViaje", "corporativoCodigoEsPeriodo",
+          "intentosCodigo", "codigoBloqueado"
+        ]) &&
+        (
+          !("codigoVerificado" in request.resource.data) ||
+          request.resource.data.codigoVerificado == false
+        );
     }
 
     function taxistaIntentaRepublicarPendiente() {
@@ -491,9 +620,25 @@ service cloud.firestore {
           "aceptacionTerminos",
           "phoneVerified", "lastPhoneReauthAt",
           "registroClienteCompleto",
-          "verificacionIdentidadEn", "verificacionIdentidadUrl",
           "empresaCorporativaId", "empresaCorporativaNombre"
         ]);
+      // Selfie del pasajero: sube su foto y queda PENDIENTE de revisión. Aprobar
+      // o rechazar es del ADM; si el propio cliente pudiera escribir el estado,
+      // se autoaprobaría y la revisión no serviría de nada.
+      allow update: if isOwner(uid) &&
+        changedOnly([
+          "verificacionIdentidadEn", "verificacionIdentidadUrl",
+          "verificacionIdentidadRevision", "verificacionIdentidadRechazoMotivo",
+          "updatedAt", "actualizadoEn"
+        ]) &&
+        (
+          !("verificacionIdentidadRevision" in request.resource.data) ||
+          request.resource.data.verificacionIdentidadRevision == "pendiente"
+        ) &&
+        (
+          !("verificacionIdentidadRechazoMotivo" in request.resource.data) ||
+          request.resource.data.verificacionIdentidadRechazoMotivo == ""
+        );
       // Disponibilidad operativa (toggle): aislado de campos de aprobación documental.
       allow update: if isOwner(uid) &&
         changedOnly([
@@ -662,7 +807,10 @@ service cloud.firestore {
       match /docs_imagenes/{tipo} {
         allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
         allow create, update: if isOwner(uid) &&
-          tipo in ['licencia', 'matricula', 'seguro', 'fotoVehiculo', 'placa'] &&
+          tipo in [
+            'licencia', 'matricula', 'seguro', 'fotoVehiculo', 'placa',
+            'verificacion_identidad'
+          ] &&
           request.resource.data.keys().hasAll(['b64', 'contentType', 'updatedAt']) &&
           request.resource.data.b64 is string &&
           request.resource.data.b64.size() > 0 &&
@@ -745,6 +893,7 @@ service cloud.firestore {
           "qrRecaudoGeneradoEn", "qrRecaudoEstado", "pagoAzulId"
         ]) &&
         viajeCreateClienteFlagsPagoInicialesOk() &&
+        viajeCreateNegocioAliadoOk() &&
         // Creación cliente: sin cerrar finanzas ni validar pagos.
         !request.resource.data.keys().hasAny(viajeCamposFinancierosProtegidosEnCreateCliente()) &&
         !request.resource.data.keys().hasAny([
@@ -753,6 +902,7 @@ service cloud.firestore {
         ]);
 
       allow update: if (isAdmin() && viajeNoTocaCamposFinancierosProtegidos()) ||
+        taxistaFlujoPickupAbordoOk() ||
         (
           // Taxista libera reserva «siguiente viaje» sin claim completo.
           esRolChoferEnSesion() &&
@@ -776,10 +926,9 @@ service cloud.firestore {
           request.resource.data.reservadoPor == ""
         ) ||
         (
-          // CLAIM pool (motor / vehículo): mismo rol que lectura del pool (taxista | driver).
+          // CLAIM pool: validación fina en app; aquí solo rol chofer + sin deuda.
           esRolChoferEnSesion() &&
           taxistaSinDeuda(request.auth.uid) &&
-          taxistaAptoParaClaimPool(request.auth.uid) &&
           (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
           (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data)) &&
           (
@@ -793,11 +942,32 @@ service cloud.firestore {
             ]
           ) &&
           viajeNoTocaCamposFinancierosProtegidos() &&
+          viajeClaimPinSinAutoverificar() &&
           request.resource.data.uidTaxista == request.auth.uid &&
           request.resource.data.taxistaId == request.auth.uid &&
           request.resource.data.aceptado == true &&
           request.resource.data.activo == true &&
           (request.resource.data.estado in ["aceptado", "en_camino_pickup", "enCaminoPickup"])
+        ) ||
+        (
+          // Cliente dueño: sembrar su PIN de abordaje si falta (conductor ya asignado)
+          // y solo mientras no esté verificado. Nunca puede marcarlo verificado
+          // ni reescribirlo después de que el servidor lo validó.
+          esDuenoClienteDelViaje() &&
+          viajeNoTocaCamposFinancierosProtegidos() &&
+          (
+            (resource.data.uidTaxista is string && resource.data.uidTaxista != "") ||
+            (resource.data.taxistaId is string && resource.data.taxistaId != "")
+          ) &&
+          resource.data.codigoVerificado != true &&
+          request.resource.data.codigoVerificado == false &&
+          request.resource.data.codigoVerificacion is string &&
+          request.resource.data.codigoVerificacion.size() == 6 &&
+          viajeNoPasaAEnCurso() &&
+          changedOnly([
+            "codigoVerificacion", "codigoVerificado",
+            "updatedAt", "actualizadoEn"
+          ])
         ) ||
         (
           esDuenoClienteDelViaje() &&
@@ -872,7 +1042,6 @@ service cloud.firestore {
           (
             esRolChoferEnSesion() &&
             taxistaSinDeuda(request.auth.uid) &&
-            taxistaAptoParaClaimPool(request.auth.uid) &&
             (
               (resource.data.uidTaxista == "" || resource.data.uidTaxista == null || !("uidTaxista" in resource.data)) &&
               (resource.data.taxistaId == "" || resource.data.taxistaId == null || !("taxistaId" in resource.data))
@@ -880,10 +1049,13 @@ service cloud.firestore {
             request.resource.data.uidTaxista == request.auth.uid &&
             request.resource.data.taxistaId == request.auth.uid &&
             viajeNoTocaCamposFinancierosProtegidos() &&
+            viajeNoPasaAEnCurso() &&
             changedOnly([
               "uidTaxista", "taxistaId", "nombreTaxista",
               "telefono", "placa", "tipoVehiculo", "tipoVehiculoOriginal",
               "marca", "modelo", "color",
+              "bancoTaxista", "numeroCuentaTaxista", "tipoCuentaTaxista",
+              "titularCuentaTaxista", "ciTaxista",
               "latTaxista", "lonTaxista", "driverLat", "driverLon",
               "estado", "aceptado", "rechazado", "activo",
               "aceptadoEn", "updatedAt", "actualizadoEn",
@@ -903,7 +1075,6 @@ service cloud.firestore {
               "latTaxista", "lonTaxista", "driverLat", "driverLon",
               "pickupConfirmadoEn", "inicioEnRutaEn", "viajeIniciadoEn", "finalizadoEn",
               "clienteAbordo", "clienteAbordoEn",
-              "codigoVerificacion", "codigoVerificado", "codigoVerificadoEn",
               "canceladoPor", "canceladoTaxistaEn", "motivoCancelacion",
               "uidTaxista", "taxistaId", "nombreTaxista",
               "telefono", "placa", "marca", "modelo", "color",
@@ -911,9 +1082,8 @@ service cloud.firestore {
               "republicado", "completado", "esAhora"
             ])
             &&
-            // En curso solo si ya estaba verificado por backend (callable).
-            (!(request.resource.data.estado in ["en_curso", "encurso"]) ||
-              resource.data.codigoVerificado == true)
+            // Inicio de viaje solo por `iniciarViajeSeguro` (PIN validado en servidor).
+            viajeNoPasaAEnCurso()
             &&
             request.resource.data.estado != "completado" &&
             request.resource.data.completado != true
@@ -1144,6 +1314,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Lugares frecuentes aprendidos de viajes FlyGo (solo Admin SDK escribe).
+    match /lugares_populares_flygo/{id} {
+      allow read: if isAuth();
+      allow create, update, delete: if false;
+    }
+
     // Configuración operativa (promociones, flags, etc.)
     match /config/{docId} {
       // Clientes/taxistas/admin deben poder leer promociones activas
@@ -1282,6 +1458,7 @@ service cloud.firestore {
         (
           datosViajeChat(viajeId).uidCliente == request.auth.uid ||
           datosViajeChat(viajeId).clienteId == request.auth.uid ||
+          datosViajeChat(viajeId).uid == request.auth.uid ||
           datosViajeChat(viajeId).uidTaxista == request.auth.uid ||
           datosViajeChat(viajeId).taxistaId == request.auth.uid ||
           datosViajeChat(viajeId).corporativoChoferAsignadoUid == request.auth.uid ||
@@ -1290,19 +1467,32 @@ service cloud.firestore {
         );
     }
 
+    function esParticipanteChatDoc(chatId) {
+      let chatData = get(/databases/$(database)/documents/chats/$(chatId)).data;
+      return isAuth() &&
+        exists(/databases/$(database)/documents/chats/$(chatId)) &&
+        chatData.participantes is list &&
+        request.auth.uid in chatData.participantes &&
+        chatData.viajeId == chatId;
+    }
+
+    function puedeAccederChatViaje(chatId) {
+      return esParticipanteViajeChat(chatId) || esParticipanteChatDoc(chatId);
+    }
+
     match /chats/{chatId} {
-      allow read: if esParticipanteViajeChat(chatId);
+      allow read: if puedeAccederChatViaje(chatId);
       allow create: if esParticipanteViajeChat(chatId) &&
         request.resource.data.viajeId == chatId &&
         request.resource.data.participantes is list &&
         request.auth.uid in request.resource.data.participantes;
-      allow update: if esParticipanteViajeChat(chatId) &&
+      allow update: if puedeAccederChatViaje(chatId) &&
         changedOnly(["lastMessage", "lastAt", "participantes", "viajeId"]);
     }
 
     match /chats/{chatId}/mensajes/{msgId} {
-      allow read: if esParticipanteViajeChat(chatId);
-      allow create: if esParticipanteViajeChat(chatId) &&
+      allow read: if puedeAccederChatViaje(chatId);
+      allow create: if puedeAccederChatViaje(chatId) &&
         request.resource.data.de == request.auth.uid &&
         request.resource.data.texto is string &&
         request.resource.data.texto.size() > 0 &&
@@ -1537,6 +1727,51 @@ service cloud.firestore {
         );
       allow update: if isAdmin() &&
         changedOnly(['leidoPorAdm', 'leidoEn']);
+      allow delete: if false;
+    }
+
+    // Dueño del viaje para mensajes a operaciones (incluye `uid` legacy).
+    function esClienteDuenoViajeId(viajeId) {
+      let v = get(/databases/$(database)/documents/viajes/$(viajeId)).data;
+      return isAuth() && (
+        v.uidCliente == request.auth.uid ||
+        v.clienteId == request.auth.uid ||
+        ('uid' in v && v.uid == request.auth.uid)
+      );
+    }
+
+    // Mensajes cliente → operaciones (espera conductor, taxi/motor).
+    match /operaciones_mensajes_adm/{msgId} {
+      allow read: if isAdmin() ||
+        (isAuth() && resource.data.uidCliente == request.auth.uid);
+      allow create: if isAuth() &&
+        request.resource.data.uidCliente == request.auth.uid &&
+        request.resource.data.leidoPorAdm == false &&
+        // La respuesta la escribe solo el admin, nunca quien abre el hilo.
+        !request.resource.data.keys().hasAny([
+          'respuesta', 'respuestaEn', 'respondidoPor', 'respondidoPorNombre',
+          'respuestaVistaPorCliente'
+        ]) &&
+        request.resource.data.mensaje is string &&
+        request.resource.data.mensaje.size() > 0 &&
+        request.resource.data.mensaje.size() <= 500 &&
+        request.resource.data.viajeId is string &&
+        request.resource.data.viajeId.size() > 0 &&
+        exists(/databases/$(database)/documents/viajes/$(request.resource.data.viajeId)) &&
+        esClienteDuenoViajeId(request.resource.data.viajeId);
+      allow update: if (
+          isAdmin() &&
+          changedOnly([
+            'leidoPorAdm', 'leidoEn',
+            'respuesta', 'respuestaEn', 'respondidoPor', 'respondidoPorNombre'
+          ])
+        ) || (
+          // El cliente solo marca que ya vio la respuesta.
+          isAuth() &&
+          resource.data.uidCliente == request.auth.uid &&
+          changedOnly(['respuestaVistaPorCliente', 'respuestaVistaEn']) &&
+          request.resource.data.respuestaVistaPorCliente == true
+        );
       allow delete: if false;
     }
 

@@ -18,6 +18,7 @@ import 'package:flygo_nuevo/utilidades/constante.dart';
 import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/widgets/bola_en_desarrollo_aviso.dart';
 import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
 
 /// Servicios habilitados según perfil del conductor (sin lógica de negocio nueva).
@@ -78,9 +79,16 @@ class TaxistaServiciosTab extends StatelessWidget {
                               enabled: !bloqueado,
                               onTap: bloqueado
                                   ? null
-                                  : () => Navigator.of(context,
-                                          rootNavigator: true)
-                                      .pushNamed(rutaBolaPueblo),
+                                  : () async {
+                                      if (!await BolaEnDesarrolloAviso
+                                          .intentarEntrarTablero(context)) {
+                                        return;
+                                      }
+                                      if (!context.mounted) return;
+                                      await Navigator.of(context,
+                                              rootNavigator: true)
+                                          .pushNamed(rutaBolaPueblo);
+                                    },
                             );
                           },
                         ),

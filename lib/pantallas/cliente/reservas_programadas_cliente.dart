@@ -53,15 +53,12 @@ class ReservasProgramadasCliente extends StatelessWidget {
                   style: TextStyle(color: Colors.white70)),
             )
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              // uidCliente siempre coincide con clienteId (CF create). Sin
+              // filtro server `programado` evita índice compuesto inexistente.
               stream: FirebaseFirestore.instance
                   .collection('viajes')
-                  .where(
-                    Filter.or(
-                      Filter('clienteId', isEqualTo: user.uid),
-                      Filter('uidCliente', isEqualTo: user.uid),
-                    ),
-                  )
-                  .limit(60)
+                  .where('uidCliente', isEqualTo: user.uid)
+                  .limit(50)
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.hasError) {
@@ -201,7 +198,14 @@ class ReservasProgramadasCliente extends StatelessWidget {
                               onPressed: () {
                                 unawaited(NavigationService.pushEnTabShell(
                                   context,
-                                  ViajeProgramadoConfirmacion(viajeId: d.id),
+                                  ViajeProgramadoConfirmacion(
+                                    viajeId: d.id,
+                                    fechaHoraPickup: fecha,
+                                    origen: origen,
+                                    destino: destino,
+                                    precio: precio > 0 ? precio : null,
+                                    desdeListaReservas: true,
+                                  ),
                                 ));
                               },
                               style: FilledButton.styleFrom(

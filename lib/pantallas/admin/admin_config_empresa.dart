@@ -40,6 +40,8 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
 
   bool _cargando = true;
   bool _guardando = false;
+  /// `false` = prepago estricto (exige cubrir la comisión estimada del viaje).
+  bool _prepagoParcial = false;
 
   @override
   void initState() {
@@ -88,6 +90,7 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
       _minOperativo.text = ((p['minimoOperativoRd'] as num?) ?? 200).toString();
       _umbralPreventivo.text =
           ((p['umbralPreventivoRd'] as num?) ?? 250).toString();
+      _prepagoParcial = p['permitirViajeConPrepagoParcial'] == true;
     } finally {
       if (mounted) setState(() => _cargando = false);
     }
@@ -165,6 +168,7 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
         minimoOperativoRd: double.parse(_minOperativo.text.trim()),
         umbralPreventivoRd: double.parse(_umbralPreventivo.text.trim()),
         motivo: motivo,
+        permitirViajeConPrepagoParcial: _prepagoParcial,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -276,6 +280,26 @@ class _AdminConfigEmpresaPageState extends State<AdminConfigEmpresa>
             const SizedBox(height: 16),
             _field(_minOperativo, 'Mínimo operativo RD\$', keyboard: TextInputType.number),
             _field(_umbralPreventivo, 'Umbral preventivo RD\$', keyboard: TextInputType.number),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _prepagoParcial,
+              onChanged: _guardando
+                  ? null
+                  : (bool v) => setState(() => _prepagoParcial = v),
+              title: Text(
+                'Permitir viaje con prepago parcial',
+                style: TextStyle(color: AdminUi.onCard(context)),
+              ),
+              subtitle: Text(
+                _prepagoParcial
+                    ? 'Modo parcial: el chofer acepta aunque el prepago no cubra la '
+                        'comisión y queda deuda al finalizar.'
+                    : 'Modo estricto (recomendado): exige mínimo operativo y prepago '
+                        'que cubra la comisión estimada del viaje.',
+                style: TextStyle(color: AdminUi.secondary(context), fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 8),
             _field(_motivoPrepago, 'Motivo del cambio', maxLines: 2),
             const SizedBox(height: 16),
             SizedBox(

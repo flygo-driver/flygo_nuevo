@@ -3,7 +3,7 @@
  *
  * Tokens: `push_tokens/{uid}.tokens[]` (y fallback `usuarios/{uid}.pushToken`).
  */
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
 import { logger } from "firebase-functions";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
@@ -59,6 +59,98 @@ async function sendToTokens(
   );
 }
 
+function uidClienteDesdeViaje(d: Record<string, unknown>): string {
+  const u = str(d.uidCliente);
+  if (u) return u;
+  const c = str(d.clienteId);
+  if (c) return c;
+  return str(d.uid);
+}
+
+function uidTaxistaDesdeViaje(d: Record<string, unknown>): string {
+  const u = str(d.uidTaxista);
+  if (u) return u;
+  return str(d.taxistaId);
+}
+
+function esParticipanteViajeDoc(d: Record<string, unknown>, uid: string): boolean {
+  if (!uid) return false;
+  return (
+    uid === uidClienteDesdeViaje(d) ||
+    uid === uidTaxistaDesdeViaje(d) ||
+    uid === str(d.corporativoChoferAsignadoUid) ||
+    uid === str(d.corporativoChoferPreferidoUid)
+  );
+}
+
+/** Asegura chats/{viajeId} con Admin SDK (evita permission-denied en cliente). */
+export const ensureChatViajeDoc = onCall(
+  { region: "us-central1" },
+  async (request) => {
+    const uid = str(request.auth?.uid);
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "Inicia sesión para usar el chat.");
+    }
+    const viajeId = str((request.data as Record<string, unknown> | undefined)?.viajeId);
+    if (!viajeId) {
+      throw new HttpsError("invalid-argument", "Viaje inválido.");
+    }
+
+    const vSnap = await db().collection("viajes").doc(viajeId).get();
+    if (!vSnap.exists) {
+      throw new HttpsError("not-found", "Viaje no encontrado.");
+    }
+    const vd = (vSnap.data() ?? {}) as Record<string, unknown>;
+    if (!esParticipanteViajeDoc(vd, uid)) {
+      throw new HttpsError("permission-denied", "No participás en este viaje.");
+    }
+
+    const participantes = new Set<string>();
+    const uidCli = uidClienteDesdeViaje(vd);
+    const uidTx = uidTaxistaDesdeViaje(vd);
+    if (uidCli) participantes.add(uidCli);
+    if (uidTx) participantes.add(uidTx);
+    participantes.add(uid);
+
+    if (participantes.size < 2) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Aún no hay conductor asignado para chatear.",
+      );
+    }
+
+    const chatRef = db().collection("chats").doc(viajeId);
+    const cSnap = await chatRef.get();
+    if (!cSnap.exists) {
+      await chatRef.set({
+        participantes: [...participantes],
+        viajeId,
+        lastMessage: "",
+        lastAt: FieldValue.serverTimestamp(),
+        creadoAt: FieldValue.serverTimestamp(),
+      });
+      logger.info("[CHAT] ensureChatViajeDoc created", { viajeId, uid });
+      return { ok: true, viajeId, created: true };
+    }
+
+    const raw = cSnap.data()?.participantes;
+    const existentes = Array.isArray(raw)
+      ? raw.map((x) => str(x)).filter((x) => x.length > 0)
+      : [];
+    const merged = new Set<string>([...existentes, ...participantes]);
+    await chatRef.set(
+      {
+        participantes: [...merged],
+        viajeId,
+        lastAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    logger.info("[CHAT] ensureChatViajeDoc merged", { viajeId, uid });
+    return { ok: true, viajeId, created: false };
+  },
+);
+
 /** Destinatario: viaje (chatId == viajeId) o chat con participantes. */
 async function resolveRecipientUid(
   chatId: string,
@@ -67,8 +159,8 @@ async function resolveRecipientUid(
   const vSnap = await db().collection("viajes").doc(chatId).get();
   if (vSnap.exists) {
     const d = vSnap.data() ?? {};
-    const cliente = str(d.uidCliente) || str(d.clienteId);
-    const taxista = str(d.uidTaxista) || str(d.taxistaId);
+    const cliente = uidClienteDesdeViaje(d);
+    const taxista = uidTaxistaDesdeViaje(d);
     const ids = [cliente, taxista].filter((x) => x.length > 0);
     for (const id of ids) {
       if (id !== senderUid) return id;
@@ -127,8 +219,8 @@ export const notifyViajeComunicacionIntento = onCall(async (request) => {
   const vSnap = await db().collection("viajes").doc(viajeId).get();
   if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
   const vd = vSnap.data() ?? {};
-  const cliente = str(vd.uidCliente) || str(vd.clienteId);
-  const taxista = str(vd.uidTaxista) || str(vd.taxistaId);
+  const cliente = uidClienteDesdeViaje(vd);
+  const taxista = uidTaxistaDesdeViaje(vd);
   let dest = "";
   if (uid === cliente) dest = taxista;
   else if (uid === taxista) dest = cliente;

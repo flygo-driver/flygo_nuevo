@@ -68,8 +68,8 @@ class ClienteNegocioAliadoPromoPanel extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 estado.elegibleGratis
-                    ? '¡Tu próximo viaje local puede ser GRATIS!'
-                    : '${estado.contador} de ${estado.m} viajes pagados',
+                    ? '¡Tu 6.º viaje local puede ser GRATIS!'
+                    : '${estado.contador} de ${estado.m} viajes pagados · el ${estado.m + 1}.º gratis',
                 style: TextStyle(
                   color: cs.onSurface,
                   fontWeight: FontWeight.w700,
@@ -88,9 +88,9 @@ class ClienteNegocioAliadoPromoPanel extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '6.º viaje gratis solo dentro de '
+                'El ${estado.m + 1}.º viaje gratis solo dentro de '
                 '${estado.ciudad.isEmpty ? "el pueblo del aliado" : estado.ciudad} '
-                '(hasta RD\$${NegocioAliadoConfig.topeViajeGratisRd.toStringAsFixed(0)}). '
+                '(origen y destino en ese pueblo, hasta RD\$${NegocioAliadoConfig.topeViajeGratisRd.toStringAsFixed(0)}). '
                 'Vigente hasta $venceTxt.',
                 style: TextStyle(
                   color: cs.onSurfaceVariant,

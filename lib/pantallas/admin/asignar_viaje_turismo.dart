@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/chat_repo.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 import '../../widgets/admin_app_bar.dart';
@@ -547,7 +548,7 @@ class _AsignarViajeTurismoState extends State<AsignarViajeTurismo> {
 
       if (res == 'ok') {
         try {
-          await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+          await ChatRepo.ensureViajeChatDoc(widget.viajeId);
         } catch (_) {
           // La asignación ya quedó; el chat se puede crear después.
         }

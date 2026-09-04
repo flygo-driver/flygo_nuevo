@@ -6,7 +6,7 @@
 #   .\scripts\deploy-functions-lotes.ps1 -Grupo corporativo-fallidas -TamanoLote 1 -PausaSegundos 90
 
 param(
-    [ValidateSet('corporativo-fallidas', 'finanzas', 'release-110', 'corporativo-billing')]
+    [ValidateSet('corporativo-fallidas', 'finanzas', 'release-110', 'corporativo-billing', 'endurecimiento-produccion')]
     [string]$Grupo = 'corporativo-fallidas',
     [int]$TamanoLote = 2,
     [int]$PausaSegundos = 75
@@ -16,15 +16,28 @@ $ErrorActionPreference = 'Continue'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $repoRoot
 
+# Lote corporativo: desplegar de a 1–2 (cuota CPU Cloud Run en deploy masivo).
 $corporativoFallidas = @(
-    'scheduledCorporativoAvisosCodigoVencimiento',
-    'taxistaRefrescarOperacionCorporativa',
+    'encargadoDarDeBajaEmpresaCorporativa',
+    'encargadoEliminarRutaCorporativa',
+    'encargadoOcultarViajeHistorialCorporativo',
     'encargadoPublicarRutaCorporativaAhora',
     'onCorporativoPlantillaRutaSinChoferAlert',
-    'scheduledCorporativoAvisosEscalonados',
-    'scheduledCorporativoRecogidaPerdida',
+    'propagarCambioHoraCorporativa',
+    'scheduledAutoClosePoolsPostDeparture',
+    'scheduledCleanupExpiredPoolReservations',
+    'scheduledCorporativoAvisosCodigoVencimiento',
+    'scheduledCorporativoExpirarSinCodigo',
+    'scheduledCorporativoRutasFijas',
     'scheduledCorporativoSustitutoChofer',
-    'scheduledNotifyCorporativoChoferRutaFija'
+    'scheduledNotifyCorporativoChoferRutaFija',
+    'scheduledNotifyPoolOwnerDepartureDay',
+    'sincronizarPlantillaCorporativaEnVivo',
+    'taxistaAbrirViajeCorporativoEnCurso',
+    'taxistaAsegurarViajeRutaCorporativa',
+    'taxistaRefrescarOperacionCorporativa',
+    'scheduledCorporativoAvisosEscalonados',
+    'scheduledCorporativoRecogidaPerdida'
 )
 
 $finanzas = @(
@@ -54,7 +67,30 @@ $corporativoBilling = @(
     'scheduledCorporativoRutasFijas'
 )
 
+# Prepago estricto + PIN autoritativo + contraofertas Bola.
+# Orden intencional: primero las funciones sin acoplamiento, y al final el bloque que
+# lee/escribe `usuarios.tienePagoPendiente`, para acortar la ventana en la que una
+# función vieja podría desmarcar el bloqueo que otra nueva acaba de poner.
+$endurecimientoProduccion = @(
+    'enviarPropuestaBolaSegura',
+    'updateComisionPrepagoConfig',
+    'approveRecargaComision',
+    'rejectRecargaComision',
+    'sincronizarBloqueoOperativoTaxista',
+    'onBilleteraTaxistaWritten',
+    'onViajesPoolCommissionWritten',
+    'scheduledReconcileBloqueoPrepagoTaxistas',
+    'aceptarViajeSeguro',
+    'reservarSiguienteViaje',
+    'promoverSiguienteViaje',
+    'finalizarViajeSeguro',
+    'azulCreateRecargaTaxistaSession',
+    'azulVerifyRecargaTaxista',
+    'crearPoolGira'
+)
+
 switch ($Grupo) {
+    'endurecimiento-produccion' { $lista = $endurecimientoProduccion }
     'finanzas' { $lista = $finanzas }
     'release-110' { $lista = $release110 }
     'corporativo-billing' { $lista = $corporativoBilling }

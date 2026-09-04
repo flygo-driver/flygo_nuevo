@@ -87,6 +87,34 @@ class PoolShareLink {
     return null;
   }
 
+  /// Mensaje listo para WhatsApp, Facebook, Instagram, estados, etc.
+  /// El enlace va primero para que las redes muestren vista previa.
+  static String mensajeRedesSociales({
+    required String textoPromo,
+    required String poolId,
+  }) {
+    final web = httpsOpenUrl(poolId);
+    if (web.isEmpty) return textoPromo.trim();
+    const play =
+        'https://play.google.com/store/apps/details?id=com.flygo.rd2';
+    return '''🔗 Reservá cupos aquí (abre RAI o descarga la app):
+$web
+
+${textoPromo.trim()}
+
+📲 Sin la app: $play''';
+  }
+
+  /// Pie corto para estado de WhatsApp (enlace clicable + vista previa web).
+  static String shareFooterCorto(String poolId) {
+    final web = httpsOpenUrl(poolId);
+    if (web.isEmpty) return '';
+    return '''
+
+🔗 Reservá cupos en RAI Pasajero:
+$web''';
+  }
+
   /// Pie del mensaje: enlace HTTPS (clicable en WhatsApp) + esquema custom opcional.
   static String shareFooter(String poolId) {
     final web = httpsOpenUrl(poolId);

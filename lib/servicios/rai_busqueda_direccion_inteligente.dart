@@ -1,7 +1,6 @@
 import 'package:flygo_nuevo/servicios/lugares_service.dart';
 import 'package:flygo_nuevo/servicios/rai_asistente_kb.dart';
 import 'package:flygo_nuevo/servicios/rai_asistente_service.dart';
-import 'package:geocoding/geocoding.dart';
 
 /// Resultado de resolver una dirección compleja → coordenadas para cotizar.
 class RaiDireccionResolucion {
@@ -129,6 +128,7 @@ class RaiBusquedaDireccionInteligente {
       country: 'República Dominicana',
       biasLat: biasLat,
       biasLon: biasLon,
+      modoMapa: true,
     );
 
     final out = <DetalleLugar>[];
@@ -144,30 +144,7 @@ class RaiBusquedaDireccionInteligente {
   }
 
   Future<DetalleLugar?> _geocodeFallback(String query) async {
-    final intentos = <String>{
-      query.trim(),
-      '${query.trim()}, República Dominicana',
-      '${query.trim()}, Dominican Republic',
-    }.where((e) => e.length >= 3).toList();
-
-    for (final q in intentos) {
-      try {
-        final results = await locationFromAddress(q);
-        if (results.isEmpty) continue;
-        final p = results.first;
-        if (p.latitude.abs() < 0.000001 && p.longitude.abs() < 0.000001) {
-          continue;
-        }
-        return DetalleLugar(
-          placeId: 'geocoded:${_norm(q)}',
-          name: query.trim(),
-          address: q,
-          lat: p.latitude,
-          lon: p.longitude,
-        );
-      } catch (_) {}
-    }
-    return null;
+    return LugaresService.instance.geocodeDireccion(query);
   }
 
   static String _norm(String s) => s.toLowerCase().trim();

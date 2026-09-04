@@ -1144,8 +1144,7 @@ abstract final class CorporativoRutaService {
     }
     final label = plantilla.origenLabel.trim();
     if (label.length >= 3) {
-      await NavegacionExternaLauncher.abrirWazeBusqueda(label);
-      return;
+      throw 'La recogida no tiene GPS. Volvé a elegir el punto en el mapa.';
     }
     throw 'Selecciona el punto de recogida tocando una opción del buscador.';
   }

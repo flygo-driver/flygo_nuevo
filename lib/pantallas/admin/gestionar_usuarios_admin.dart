@@ -1057,9 +1057,10 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     final Color estadoColor = bloqueado || prepagoBloq
         ? Colors.redAccent
         : Colors.greenAccent;
-    final identidadEstado = rol == Roles.cliente
-        ? ClienteVerificacionIdentidadService.estadoDesde(m)
-        : ClienteVerificacionIdentidadEstado.noAplica;
+    final identidadEstado =
+        ClienteVerificacionIdentidadService.esCuentaPasajeroParaSelfie(m)
+            ? ClienteVerificacionIdentidadService.estadoDesde(m)
+            : ClienteVerificacionIdentidadEstado.noAplica;
 
     return Container(
       padding: const EdgeInsets.all(14),

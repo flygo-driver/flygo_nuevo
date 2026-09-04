@@ -67,6 +67,10 @@ class EstadosViaje {
   static const Set<String> _aliasCancelado = {
     'cancelado',
     'cancelado_cliente',
+    'cancelado_por_tiempo',
+    'cancelado_gira',
+    'cancelado_admin',
+    'cancelado_por_admin',
   };
 
   // ====== Conjuntos útiles ======
@@ -181,7 +185,10 @@ class EstadosViaje {
       taxistaMuestraPanelFinalizarViaje(estadoNorm,
           codigoVerificado: codigoVerificado);
   static bool esCompletado(String e) => normalizar(e) == completado;
-  static bool esCancelado(String e) => normalizar(e) == cancelado;
+  static bool esCancelado(String e) {
+    final n = normalizar(e);
+    return n == cancelado || n == canceladoPorTiempo;
+  }
   static bool esRechazado(String e) => normalizar(e) == rechazado;
 
   static bool esActivo(String e) => activos.contains(normalizar(e));

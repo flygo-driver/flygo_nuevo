@@ -7,11 +7,15 @@
 
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/calculos/estados.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// Al montar [child] (p. ej. [ClienteHome] en la pestaña Inicio), redirige a
 /// [ClientePantallaViajeActivo] si el servidor reporta un viaje activo.
@@ -37,6 +41,12 @@ class _ViajeSolicitadoActivoBootstrapState
 
   Future<void> _redirigirSiCorresponde() async {
     if (!mounted) return;
+    if (ActiveTripService.clienteSuprimirOverlayViajeActivo) {
+      print(
+        '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap omitido (cotización)',
+      );
+      return;
+    }
     if (ActiveTripService.debeForzarInicioClienteShell) {
       print(
         '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap omitido (forzar inicio)',
@@ -48,13 +58,48 @@ class _ViajeSolicitadoActivoBootstrapState
     print(
         '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap init uid=$uid → comprobar activo');
     try {
-      final bool ok = await ActiveTripService.tieneViajeActivo(uid);
-      if (!mounted || !ok) return;
-      // Ya estamos dentro de [ClienteShell]: no hacer pushAndRemoveUntil en el
-      // tab anidado (deja el flujo roto). Pedimos overlay y rebuild del shell.
+      final DocumentSnapshot<Map<String, dynamic>>? snap =
+          await ActiveTripService.obtenerDocumentoViajeActivo(uid);
+      if (snap == null || !snap.exists) return;
+      if (ActiveTripService.viajeClienteDescartadoEnSesion(snap.id)) return;
+      if (await ViajesRepo.viajeQueryMatchEsFantasmaParaCliente(snap.id)) {
+        print(
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → viaje fantasma ${snap.id}',
+        );
+        await ActiveTripService.liberarClienteTrasViajeEliminado(
+          snap.id,
+          uid: uid,
+        );
+        return;
+      }
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      if (ViajePoolTaxistaGate.clienteDebeVerConfirmacionProgramado(d)) {
+        print(
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → reserva programada',
+        );
+        return;
+      }
+      if (!ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(d, uid)) {
+        print(
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → doc sin overlay id=${snap.id} estado=${d['estado']}',
+        );
+        return;
+      }
+      final String st =
+          EstadosViaje.normalizar((d['estado'] ?? '').toString());
+      if (d['completado'] == true || EstadosViaje.esTerminal(st)) {
+        return;
+      }
+      if (!mounted) return;
+      // Ya tenemos el doc (incl. query fallback); no repetir tieneViajeActivo
+      // que solo lee viajeActivoId + GET directo y falla con permission-denied.
       print(
-          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → overlay shell');
-      ActiveTripService.mantenerOverlayViajeEnShell(const Duration(seconds: 120));
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap → overlay shell vid=${snap.id}');
+      ActiveTripService.cancelarForzarInicioClienteShell();
+      ActiveTripService.registrarViajeOperativoCliente(snap.id);
+      ActiveTripService.mantenerOverlayViajeEnShell(
+        ActiveTripService.kOverlayClienteViajeActivo,
+      );
       ActiveTripService.notificarRebuildShell();
     } catch (e) {
       print('[VIAJE_ACTIVO] ViajeSolicitadoActivoBootstrap error: $e');
@@ -91,6 +136,21 @@ class ViajeSolicitadoActivo {
     try {
       final snap = await ActiveTripService.obtenerDocumentoViajeActivo(uid);
       if (snap == null || !snap.exists) return;
+      final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+      if (ViajePoolTaxistaGate.clienteDebeVerConfirmacionProgramado(d)) {
+        print(
+          '[VIAJE_ACTIVO] ViajeSolicitadoActivo → confirmación programado',
+        );
+        await NavigationService.abrirConfirmacionProgramadoEnShell(
+          viajeId: snap.id,
+          fechaHoraPickup: ViajePoolTaxistaGate.fechaHoraDeViaje(d),
+          preNav: nav,
+        );
+        return;
+      }
+      if (!ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(d, uid)) {
+        return;
+      }
       print('[VIAJE_ACTIVO] ViajeSolicitadoActivo → clearAndGoViajeEnCursoCliente');
       await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
     } catch (e) {

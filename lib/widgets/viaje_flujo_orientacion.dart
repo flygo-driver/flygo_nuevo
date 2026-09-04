@@ -93,11 +93,11 @@ String? viajeFlujoOrientacionMensajeTaxista({
       if (!navegacionDestinoIniciada) {
         return esCorporativo
             ? 'Toca «Navegar a la parada» para cada pasajero en el orden de la ruta.'
-            : 'Desliza la hoja y toca «Navegar a la parada» o «Navegar al destino final».';
+            : 'Desliza la hoja: ves el orden del cliente y tocá «Navegar» en la parada que vayas primero.';
       }
       return esCorporativo
           ? 'En cada parada: toca «Llegué — siguiente destino» al dejar al pasajero.'
-          : 'Confirma cada parada con «Llegué — siguiente destino» antes de finalizar.';
+          : 'Tocá «Navegar» en cada parada (orden libre si los pasajeros acuerdan). Las usadas quedan con ✓.';
     }
     if (!navegacionDestinoIniciada) {
       return esCorporativo

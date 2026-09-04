@@ -23,6 +23,7 @@ class ClienteViajeConductorAsignadoPanel extends StatelessWidget {
     required this.onVerEnMapa,
     this.onCentrarMapa,
     this.inicioCamino,
+    this.pinAbordo,
   });
 
   final Viaje viaje;
@@ -36,6 +37,7 @@ class ClienteViajeConductorAsignadoPanel extends StatelessWidget {
   final VoidCallback onVerEnMapa;
   final VoidCallback? onCentrarMapa;
   final DateTime? inicioCamino;
+  final Widget? pinAbordo;
 
   static const Color _amarillo = RaiDsColors.gold;
 
@@ -48,7 +50,7 @@ class ClienteViajeConductorAsignadoPanel extends StatelessWidget {
       case EstadosViaje.aBordo:
         return 3;
       case EstadosViaje.enCurso:
-        return 2;
+        return 3;
       default:
         return 1;
     }
@@ -138,6 +140,8 @@ class ClienteViajeConductorAsignadoPanel extends StatelessWidget {
         const SizedBox(height: 12),
         ClienteViajeProgresoStepper(pasoActivo: pasoDesdeEstado(estadoBase)),
         if (inicioCamino != null &&
+            estadoBase != EstadosViaje.enCurso &&
+            !EstadosViaje.esCompletado(estadoBase) &&
             (estadoBase == EstadosViaje.aceptado ||
                 estadoBase == EstadosViaje.enCaminoPickup)) ...[
           const SizedBox(height: 12),
@@ -156,6 +160,10 @@ class ClienteViajeConductorAsignadoPanel extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         conductorCard,
+        if (pinAbordo != null) ...[
+          const SizedBox(height: 10),
+          pinAbordo!,
+        ],
         const SizedBox(height: 10),
         Row(
           children: [
@@ -227,7 +235,7 @@ class _CodigoChip extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Text(
-            'Código',
+            'Ref. viaje',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.5),
               fontSize: 9,

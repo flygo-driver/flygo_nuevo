@@ -27,7 +27,7 @@ const financePatch = {
   poolRecaudoSoloNuevasGiras: true,
   poolLiquidacionAlFinalizar: true,
   poolRecaudoAutoVerificarConciliacion: true,
-  transferenciaRecaudoEnCuentaRai: true,
+  transferenciaRecaudoEnCuentaRai: false,
   transferenciaExigeVerificadoParaFinalizar: false,
   conciliacionAutomaticaHabilitada: true,
 };

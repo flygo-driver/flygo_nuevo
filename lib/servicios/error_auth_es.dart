@@ -9,6 +9,8 @@ String errorAuthEs(Object e) {
         return 'Permiso denegado.';
       case 'unauthenticated':
         return 'Sesión expirada. Vuelve a iniciar sesión.';
+      case 'unavailable':
+        return 'Servicio en la nube no disponible. La app intentará el modo local.';
       case 'failed-precondition':
         return (e.message ?? '').trim().isNotEmpty
             ? e.message!.trim()
@@ -62,5 +64,17 @@ String errorAuthEs(Object e) {
     }
   }
 
+  final String msg = _exceptionMessage(e).trim();
+  if (msg.isNotEmpty) return msg;
   return 'Ocurrió un error inesperado.';
+}
+
+String _exceptionMessage(Object e) {
+  if (e is Exception) {
+    final raw = e.toString();
+    const prefix = 'Exception: ';
+    if (raw.startsWith(prefix)) return raw.substring(prefix.length);
+    return raw;
+  }
+  return e.toString();
 }

@@ -1187,8 +1187,9 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     final now = DateTime.now();
 
-    // Fallback tolerante: si publishAt falta, no bloqueamos.
-    final bool publishOk = (pub == null) || !now.isBefore(pub);
+    // Tab programados: publishAt obligatorio (reserva lejana no debe colarse).
+    if (pub == null) return false;
+    final bool publishOk = !now.isBefore(pub);
     final bool acceptOk = (acc == null) || !now.isBefore(acc);
     return publishOk && acceptOk;
   }
@@ -1246,7 +1247,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       rootNav = NavigationService.navigatorKey.currentState;
       rootNav ??= Navigator.of(context, rootNavigator: true);
     }
-    ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+    ActiveTripService.bloquearShellTaxistaTrasAceptar(
+      const Duration(minutes: 3),
+      viajeId: v.id,
+    );
     _navegandoAViajeActivo = true;
     var navegoAViajeEnCurso = false;
 
@@ -1383,7 +1387,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
           'actualizadoEn': fs.FieldValue.serverTimestamp(),
         }, fs.SetOptions(merge: true));
         _navegandoAViajeActivo = true;
-        ActiveTripService.bloquearShellTaxistaTrasAceptar(const Duration(minutes: 3));
+        ActiveTripService.bloquearShellTaxistaTrasAceptar(
+          const Duration(minutes: 3),
+          viajeId: viajeId,
+        );
         final NavigatorState? preNav =
             NavigationService.navigatorKey.currentState;
         await NavigationService.irAViajeEnCursoTaxistaTrasAceptar(

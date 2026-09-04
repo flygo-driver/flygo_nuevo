@@ -5,10 +5,9 @@ import 'package:flutter/material.dart';
 class RaiUbicacionBannerScope extends InheritedWidget {
   const RaiUbicacionBannerScope({super.key, required super.child});
 
+  /// Solo consulta el árbol; no registra dependencia (evita asserts al abrir teclado/buscador).
   static bool isDescendant(BuildContext context) =>
-      context
-          .dependOnInheritedWidgetOfExactType<RaiUbicacionBannerScope>() !=
-      null;
+      context.getInheritedWidgetOfExactType<RaiUbicacionBannerScope>() != null;
 
   @override
   bool updateShouldNotify(RaiUbicacionBannerScope oldWidget) => false;

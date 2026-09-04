@@ -6,12 +6,17 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_shell_nav_bridge.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/precio_viaje_doc.dart';
+import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/rai_back_button.dart';
+import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
 import 'package:flygo_nuevo/widgets/turismo_mensaje_operaciones_panel.dart';
 
 String _textoVentanaPoolCliente(int minutos) {
@@ -53,6 +58,7 @@ class ViajeProgramadoConfirmacion extends StatefulWidget {
     this.origen,
     this.destino,
     this.precio,
+    this.desdeListaReservas = false,
   });
 
   final String viajeId;
@@ -60,6 +66,9 @@ class ViajeProgramadoConfirmacion extends StatefulWidget {
   final String? origen;
   final String? destino;
   final double? precio;
+
+  /// Desde «Mis reservas programadas»: mostrar detalle estable sin auto-redirigir al mapa.
+  final bool desdeListaReservas;
 
   @override
   State<ViajeProgramadoConfirmacion> createState() =>
@@ -82,6 +91,9 @@ class _ViajeProgramadoConfirmacionState
   bool _turismoProgramadoPoolEnCurso = false;
   bool _navegoAlMapa = false;
   bool _cancelando = false;
+  bool _saliendoAlInicio = false;
+  Map<String, dynamic>? _viajeDocCache;
+  bool _viajeDocSyncEnCurso = false;
 
   static bool _puedeCancelarReserva(_FaseReserva f) {
     return f == _FaseReserva.antesDelPool ||
@@ -99,6 +111,44 @@ class _ViajeProgramadoConfirmacionState
         return 'Cancelado por cliente (reserva pendiente de pago)';
       default:
         return 'Cancelado por cliente';
+    }
+  }
+
+  Future<void> _volverAlInicioDesdeReserva({
+    bool forzarLimpiarViajeActivo = false,
+  }) async {
+    if (_saliendoAlInicio) return;
+    _saliendoAlInicio = true;
+    if (mounted) setState(() {});
+
+    final String vid = widget.viajeId.trim();
+    print(
+      '[VIAJE_ACTIVO] reserva volverAlInicio tap vid=$vid '
+      'desdeLista=${widget.desdeListaReservas}',
+    );
+
+    try {
+      if (vid.isNotEmpty) {
+        ActiveTripService.sembrarBootstrapViajeCliente(vid, _datosLocales());
+      }
+
+      await NavigationService.salirReservaProgramadaAlInicioCliente(
+        viajeId: vid,
+        forzarLimpiarViajeActivo: forzarLimpiarViajeActivo,
+        context: mounted ? context : null,
+      );
+    } catch (e) {
+      print('[VIAJE_ACTIVO] reserva volverAlInicio error: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo volver al inicio: $e'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      _saliendoAlInicio = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -156,39 +206,109 @@ class _ViajeProgramadoConfirmacionState
 
     setState(() => _cancelando = true);
     try {
-      await ViajesRepo.cancelarPorCliente(
-        viajeId: widget.viajeId,
-        uidCliente: user.uid,
-        motivo: _motivoCancelacionFirestore(fase),
-      );
+      final Map<String, dynamic> docHint =
+          _viajeDocCache ?? _datosLocales();
+      final bool prePool = fase == _FaseReserva.antesDelPool ||
+          fase == _FaseReserva.pendientePago ||
+          ViajesRepo.esReservaProgramadaAntesDelPool(docHint);
+
+      if (prePool) {
+        await ViajesRepo.cancelarReservaProgramadaPrePoolRadical(
+          viajeId: widget.viajeId,
+          uidCliente: user.uid,
+          motivo: _motivoCancelacionFirestore(fase),
+          docHint: docHint,
+        );
+      } else {
+        await ViajesRepo.cancelarPorCliente(
+          viajeId: widget.viajeId,
+          uidCliente: user.uid,
+          motivo: _motivoCancelacionFirestore(fase),
+        ).timeout(const Duration(seconds: 20));
+      }
+
       if (!mounted) return;
+      setState(() {
+        _actualizarViajeDocCache(<String, dynamic>{
+          'estado': EstadosViaje.cancelado,
+          'activo': false,
+          'aceptado': false,
+        });
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Reserva cancelada'),
           backgroundColor: Color(0xFF2E7D32),
         ),
       );
-      unawaited(NavigationService.irAlInicioCliente(
-        context: context,
-        viajeId: widget.viajeId,
-        forzarLimpiarViajeActivo: true,
-      ));
+      if (mounted) setState(() => _cancelando = false);
+      if (!mounted) return;
+      if (widget.desdeListaReservas) {
+        Navigator.of(context).pop();
+        return;
+      }
+      await _volverAlInicioDesdeReserva(forzarLimpiarViajeActivo: true);
     } catch (e) {
       if (!mounted) return;
+      final String msg = ViajesRepo.mensajeErrorCancelarCliente(e);
+      try {
+        final fresh = await ViajesRepo.leerViajeServidor(widget.viajeId)
+            .timeout(const Duration(seconds: 6));
+        if (fresh != null &&
+            EstadosViaje.esCancelado(
+              EstadosViaje.normalizar((fresh['estado'] ?? '').toString()),
+            )) {
+          if (mounted) setState(() => _cancelando = false);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Reserva cancelada'),
+              backgroundColor: Color(0xFF2E7D32),
+            ),
+          );
+          if (widget.desdeListaReservas) {
+            Navigator.of(context).pop();
+          } else {
+            await _volverAlInicioDesdeReserva(forzarLimpiarViajeActivo: true);
+          }
+          return;
+        }
+      } catch (_) {}
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cancelar: $e')),
+        SnackBar(content: Text(msg)),
       );
     } finally {
       if (mounted) setState(() => _cancelando = false);
     }
   }
 
+  bool _tieneDatosLocales() =>
+      _viajeDocCache != null || widget.fechaHoraPickup != null;
+
+  Map<String, dynamic> _datosLocales() => _viajeDocCache ?? _semillaReservaDoc();
+
+  void _actualizarViajeDocCache(Map<String, dynamic> data) {
+    _viajeDocCache = <String, dynamic>{
+      ...?_viajeDocCache,
+      ...data,
+    };
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.fechaHoraPickup != null) {
+      _viajeDocCache = _semillaReservaDoc();
+    }
+    final String vid = widget.viajeId.trim();
+    if (vid.isNotEmpty) {
+      ActiveTripService.sembrarBootstrapViajeCliente(vid, _datosLocales());
+    }
     _tick = Timer.periodic(const Duration(seconds: 20), (_) {
       if (mounted) setState(() {});
     });
+    unawaited(_precargarViajeDocServidor());
   }
 
   @override
@@ -216,6 +336,180 @@ class _ViajeProgramadoConfirmacionState
   void _stopTurismoProgramadoPoolTimer() {
     _turismoProgramadoPoolTimer?.cancel();
     _turismoProgramadoPoolTimer = null;
+  }
+
+  Map<String, dynamic> _semillaReservaDoc() {
+    final Map<String, dynamic> out = <String, dynamic>{
+      'programado': true,
+      'esAhora': false,
+      'activo': false,
+      'estado': EstadosViaje.pendiente,
+      if (widget.fechaHoraPickup != null)
+        'fechaHora': Timestamp.fromDate(widget.fechaHoraPickup!),
+      if (widget.origen != null && widget.origen!.trim().isNotEmpty)
+        'origen': widget.origen!.trim(),
+      if (widget.destino != null && widget.destino!.trim().isNotEmpty)
+        'destino': widget.destino!.trim(),
+      if (widget.precio != null && widget.precio! > 0) 'precio': widget.precio,
+    };
+    final DateTime? pickup = widget.fechaHoraPickup;
+    if (pickup != null) {
+      final DateTime now = DateTime.now();
+      final DateTime publishAt =
+          TripPublishWindows.poolOpensAtForScheduledPickup(pickup, now);
+      final DateTime acceptAfter =
+          TripPublishWindows.acceptAfterForScheduledPickup(pickup, now);
+      out['publishAt'] = Timestamp.fromDate(publishAt);
+      out['acceptAfter'] = Timestamp.fromDate(acceptAfter);
+      out['startWindowAt'] = Timestamp.fromDate(
+        TripPublishWindows.startWindowAtForScheduledPickup(pickup, now),
+      );
+    }
+    return out;
+  }
+
+  Future<void> _precargarViajeDocServidor() async {
+    final String vid = widget.viajeId.trim();
+    if (vid.isEmpty || _viajeDocSyncEnCurso) return;
+    _viajeDocSyncEnCurso = true;
+    try {
+      for (int i = 0; i < 6; i++) {
+        if (!mounted) return;
+        try {
+          if (i == 0) {
+            await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          }
+          final DocumentSnapshot<Map<String, dynamic>> snap =
+              await FirebaseFirestore.instance.collection('viajes').doc(vid).get(
+                    i == 0
+                        ? const GetOptions(source: Source.server)
+                        : const GetOptions(),
+                  );
+          if (!mounted) return;
+          if (snap.exists) {
+            setState(() => _actualizarViajeDocCache(snap.data()!));
+            return;
+          }
+        } on FirebaseException catch (e) {
+          if (e.code != 'permission-denied' &&
+              e.code != 'permission_denied' &&
+              e.code != 'unavailable') {
+            break;
+          }
+        } catch (_) {}
+        await Future<void>.delayed(Duration(milliseconds: 300 * (i + 1)));
+      }
+    } finally {
+      _viajeDocSyncEnCurso = false;
+    }
+  }
+
+  Widget _pantallaCargandoReserva({String? mensaje}) {
+    return PopScope(
+      canPop: widget.desdeListaReservas,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        unawaited(_volverAlInicioDesdeReserva());
+      },
+      child: Scaffold(
+      appBar: AppBar(
+        title: const Text('Reserva'),
+        leading: IconButton(
+          icon: Icon(
+            widget.desdeListaReservas
+                ? Icons.arrow_back_rounded
+                : Icons.close_rounded,
+            color: RaiBackButton.resolveColor(context),
+          ),
+          onPressed: () => unawaited(_volverAlInicioDesdeReserva()),
+        ),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              mensaje ?? 'Cargando tu reserva…',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.72),
+              ),
+            ),
+          ],
+        ),
+      ),
+      ),
+    );
+  }
+
+  Widget _buildReservaDesdeSnapshot({
+    required BuildContext context,
+    required ThemeData theme,
+    required bool isDark,
+    required Color accent,
+    required DateFormat fmtLargo,
+    required DateFormat fmtCorto,
+    required AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snap,
+  }) {
+    if (snap.hasError) {
+      unawaited(_precargarViajeDocServidor());
+      if (_tieneDatosLocales()) {
+        return _buildReservaDesdeData(
+          context: context,
+          theme: theme,
+          isDark: isDark,
+          accent: accent,
+          fmtLargo: fmtLargo,
+          fmtCorto: fmtCorto,
+          data: _datosLocales(),
+        );
+      }
+      return _pantallaCargandoReserva(
+        mensaje: 'Sincronizando tu reserva con el servidor…',
+      );
+    }
+
+    final doc = snap.data;
+    if (doc == null || !doc.exists) {
+      unawaited(_precargarViajeDocServidor());
+      if (_tieneDatosLocales()) {
+        return _buildReservaDesdeData(
+          context: context,
+          theme: theme,
+          isDark: isDark,
+          accent: accent,
+          fmtLargo: fmtLargo,
+          fmtCorto: fmtCorto,
+          data: _datosLocales(),
+        );
+      }
+      return _pantallaCargandoReserva();
+    }
+
+    final data = doc.data()!;
+    if (!doc.metadata.isFromCache) {
+      _actualizarViajeDocCache(data);
+    } else if (_viajeDocCache == null) {
+      _viajeDocCache = data;
+    }
+    final Map<String, dynamic> effectiveData =
+        doc.metadata.isFromCache && _viajeDocCache != null
+            ? _viajeDocCache!
+            : data;
+    return _buildReservaDesdeData(
+      context: context,
+      theme: theme,
+      isDark: isDark,
+      accent: accent,
+      fmtLargo: fmtLargo,
+      fmtCorto: fmtCorto,
+      data: effectiveData,
+    );
   }
 
   /// Turismo programado: al abrir ventana (`publishAt`), auto-asignar o liberar al pool (callable).
@@ -299,6 +593,11 @@ class _ViajeProgramadoConfirmacionState
 
     if (EstadosViaje.esPendientePago(estado)) return _FaseReserva.pendientePago;
 
+    if (d['programado'] == true &&
+        !ViajePoolTaxistaGate.ventanaPublicacionYAceptacionOk(d)) {
+      return _FaseReserva.antesDelPool;
+    }
+
     final acceptAfter = _ts(d['acceptAfter']);
     final publishAt = _ts(d['publishAt']);
 
@@ -315,9 +614,11 @@ class _ViajeProgramadoConfirmacionState
     _navegoAlMapa = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      ActiveTripService.cancelarForzarInicioClienteShell();
       unawaited(
         NavigationService.clearAndGoViajeEnCursoCliente(
           preNav: Navigator.of(context, rootNavigator: true),
+          forzarReabrir: true,
         ),
       );
     });
@@ -335,24 +636,28 @@ class _ViajeProgramadoConfirmacionState
       stream: FirebaseFirestore.instance
           .collection('viajes')
           .doc(widget.viajeId)
-          .snapshots(),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Scaffold(
-            appBar: AppBar(title: const Text('Reserva')),
-            body: Center(child: Text('Error: ${snap.error}')),
-          );
-        }
+          .snapshots(includeMetadataChanges: true),
+      builder: (context, snap) => _buildReservaDesdeSnapshot(
+        context: context,
+        theme: theme,
+        isDark: isDark,
+        accent: accent,
+        fmtLargo: fmtLargo,
+        fmtCorto: fmtCorto,
+        snap: snap,
+      ),
+    );
+  }
 
-        final doc = snap.data;
-        if (doc == null || !doc.exists) {
-          return Scaffold(
-            appBar: AppBar(title: const Text('Reserva')),
-            body: const Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        final data = doc.data()!;
+  Widget _buildReservaDesdeData({
+    required BuildContext context,
+    required ThemeData theme,
+    required bool isDark,
+    required Color accent,
+    required DateFormat fmtLargo,
+    required DateFormat fmtCorto,
+    required Map<String, dynamic> data,
+  }) {
         final uid = FirebaseAuth.instance.currentUser?.uid;
         final cliente = ViajesRepo.uidClienteDesdeDocViaje(data);
         if (uid != null &&
@@ -383,11 +688,56 @@ class _ViajeProgramadoConfirmacionState
           _stopTurismoProgramadoPoolTimer();
         }
 
-        if (fase == _FaseReserva.conductorAsignado) {
+        if (fase == _FaseReserva.conductorAsignado && !widget.desdeListaReservas) {
           _irAViajeEnCursoOnce();
-          return Scaffold(
-            backgroundColor: theme.scaffoldBackgroundColor,
-            body: const Center(child: CircularProgressIndicator()),
+          return PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (bool didPop, Object? result) {
+              if (didPop) return;
+              unawaited(_volverAlInicioDesdeReserva());
+            },
+            child: Scaffold(
+              backgroundColor: theme.scaffoldBackgroundColor,
+              appBar: AppBar(
+                title: const Text('Conductor asignado'),
+                leading: IconButton(
+                  icon: Icon(
+                    Icons.close_rounded,
+                    color: RaiBackButton.resolveColor(context),
+                  ),
+                  onPressed: _saliendoAlInicio
+                      ? null
+                      : () => unawaited(_volverAlInicioDesdeReserva()),
+                ),
+              ),
+              body: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Abriendo tu viaje en el mapa…',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    OutlinedButton.icon(
+                      onPressed: _saliendoAlInicio
+                          ? null
+                          : () => unawaited(_volverAlInicioDesdeReserva()),
+                      icon: const Icon(Icons.home_outlined),
+                      label: Text(
+                        _saliendoAlInicio
+                            ? 'Volviendo al inicio…'
+                            : 'Volver al inicio',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           );
         }
 
@@ -403,25 +753,25 @@ class _ViajeProgramadoConfirmacionState
             ? widget.viajeId.substring(0, 6)
             : widget.viajeId;
 
-        return Scaffold(
+        return PopScope(
+          canPop: widget.desdeListaReservas,
+          onPopInvokedWithResult: (bool didPop, Object? result) {
+            if (didPop) return;
+            unawaited(_volverAlInicioDesdeReserva());
+          },
+          child: Scaffold(
           appBar: AppBar(
             title: Text(esTurismo ? 'Reserva turística' : 'Tu reserva'),
             leading: IconButton(
               icon: Icon(
-                Icons.close_rounded,
+                widget.desdeListaReservas
+                    ? Icons.arrow_back_rounded
+                    : Icons.close_rounded,
                 color: RaiBackButton.resolveColor(context),
               ),
-              onPressed: () {
-                unawaited(
-                  NavigationService.irAlInicioCliente(
-                    context: context,
-                    viajeId: widget.viajeId,
-                    forzarLimpiarViajeActivo:
-                        fase == _FaseReserva.cancelado ||
-                        fase == _FaseReserva.completado,
-                  ),
-                );
-              },
+              onPressed: _cancelando
+                  ? null
+                  : () => unawaited(_volverAlInicioDesdeReserva()),
             ),
           ),
           body: SafeArea(
@@ -449,6 +799,15 @@ class _ViajeProgramadoConfirmacionState
                     title: 'Pendiente de pago',
                     subtitle:
                         'Cuando el pago quede confirmado, tu viaje seguirá el flujo habitual hacia el pool de conductores.',
+                  )
+                else if (fase == _FaseReserva.conductorAsignado)
+                  _BannerEstado(
+                    icon: Icons.directions_car_filled_outlined,
+                    color: accent,
+                    title: 'Conductor asignado',
+                    subtitle: esTurismo
+                        ? 'Tu chofer de turismo ya está asignado. Puedes abrir el viaje en el mapa cuando quieras.'
+                        : 'Tu conductor ya está asignado. Puedes abrir el viaje en el mapa cuando quieras.',
                   )
                 else ...[
                   Icon(Icons.event_available_rounded, size: 48, color: accent),
@@ -630,43 +989,64 @@ class _ViajeProgramadoConfirmacionState
                     ),
                   ),
                 ],
+                if (fase == _FaseReserva.conductorAsignado) ...[
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _saliendoAlInicio
+                        ? null
+                        : () => unawaited(
+                              NavigationService.clearAndGoViajeEnCursoCliente(
+                                preNav:
+                                    Navigator.of(context, rootNavigator: true),
+                                forzarReabrir: true,
+                              ),
+                            ),
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('Abrir viaje en el mapa'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      backgroundColor: accent,
+                      foregroundColor: isDark ? Colors.black : Colors.white,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 FilledButton(
                   onPressed: _cancelando
                       ? null
-                      : () {
-                          unawaited(
-                            NavigationService.irAlInicioCliente(
-                              context: context,
-                              viajeId: widget.viajeId,
-                              forzarLimpiarViajeActivo:
-                                  fase == _FaseReserva.cancelado ||
-                                  fase == _FaseReserva.completado,
-                            ),
-                          );
-                        },
+                      : () => unawaited(_volverAlInicioDesdeReserva()),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     backgroundColor: accent,
                     foregroundColor: isDark ? Colors.black : Colors.white,
                   ),
-                  child: const Text('Volver al inicio'),
+                  child: Text(
+                    _saliendoAlInicio
+                        ? (widget.desdeListaReservas
+                            ? 'Volviendo…'
+                            : 'Volviendo al inicio…')
+                        : (widget.desdeListaReservas
+                            ? 'Volver a la lista'
+                            : 'Volver al inicio'),
+                  ),
                 ),
+                if (!widget.desdeListaReservas) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Podés volver a esta pantalla desde el menú: «Mis reservas programadas».',
+                  'Podés volver al inicio y seguir usando la app. '
+                  'Tu reserva está en «Mis viajes» → «Reservas programadas».',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                     height: 1.35,
                   ),
                   textAlign: TextAlign.center,
                 ),
+                ],
               ],
             ),
           ),
+        ),
         );
-      },
-    );
   }
 }
 
@@ -1008,8 +1388,14 @@ class _OtrasReservasSection extends StatelessWidget {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('viajes')
-          .where('clienteId', isEqualTo: uid)
-          .limit(50)
+          .where(
+            Filter.or(
+              Filter('clienteId', isEqualTo: uid),
+              Filter('uidCliente', isEqualTo: uid),
+            ),
+          )
+          .where('programado', isEqualTo: true)
+          .limit(30)
           .snapshots(),
       builder: (context, snap) {
         if (!snap.hasData || snap.hasError) return const SizedBox.shrink();
@@ -1053,7 +1439,16 @@ class _OtrasReservasSection extends StatelessWidget {
                     onTap: () {
                       unawaited(NavigationService.pushEnTabShell(
                         context,
-                        ViajeProgramadoConfirmacion(viajeId: doc.id),
+                        ViajeProgramadoConfirmacion(
+                          viajeId: doc.id,
+                          fechaHoraPickup: fecha,
+                          origen: o,
+                          destino: de,
+                          precio: totalRdDesdeDocViaje(m) > 0
+                              ? totalRdDesdeDocViaje(m)
+                              : null,
+                          desdeListaReservas: true,
+                        ),
                       ));
                     },
                     child: Padding(

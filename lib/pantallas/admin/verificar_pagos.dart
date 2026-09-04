@@ -1147,12 +1147,11 @@ class _VerificarPagosState extends State<VerificarPagos> {
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: 8),
-            child: StreamBuilder<fs.QuerySnapshot<Map<String, dynamic>>>(
-              stream: fs.FirebaseFirestore.instance
-                  .collection('recargas_comision_taxista')
-                  .snapshots(),
+            child: StreamBuilder<List<RecargaComisionTaxista>>(
+              // Historial acotado: sin límite el listener traía toda la colección.
+              stream: PagosTaxistaRepo.streamRecargasComisionAdmin(),
               builder: (BuildContext context,
-                  AsyncSnapshot<fs.QuerySnapshot<Map<String, dynamic>>> rsnap) {
+                  AsyncSnapshot<List<RecargaComisionTaxista>> rsnap) {
                 if (rsnap.connectionState == ConnectionState.waiting) {
                   return const Padding(
                     padding: EdgeInsets.all(24),
@@ -1180,18 +1179,9 @@ class _VerificarPagosState extends State<VerificarPagos> {
                     ),
                   );
                 }
-                final List<RecargaComisionTaxista> recargasRaw = (rsnap
-                            .data?.docs ??
-                        [])
-                    .map(RecargaComisionTaxista.fromDoc)
-                    .toList()
-                  ..sort((a, b) {
-                    final ta =
-                        a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-                    final tb =
-                        b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-                    return tb.compareTo(ta);
-                  });
+                final List<RecargaComisionTaxista> recargasRaw =
+                    List<RecargaComisionTaxista>.of(
+                        rsnap.data ?? const <RecargaComisionTaxista>[]);
                 final List<RecargaComisionTaxista> recargas =
                     recargasRaw.where((r) {
                   final q = _buscarRecarga.trim().toLowerCase();

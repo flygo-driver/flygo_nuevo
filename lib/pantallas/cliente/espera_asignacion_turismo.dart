@@ -7,7 +7,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:flygo_nuevo/utils/navegacion_salida_app.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
-import 'package:flygo_nuevo/shell/cliente_shell.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
@@ -32,7 +31,14 @@ const String _kTurismoSoporteTelVisible = '809-420-1481';
 
 class EsperaAsignacionTurismo extends StatefulWidget {
   final String viajeId;
-  const EsperaAsignacionTurismo({super.key, required this.viajeId});
+  /// Dentro de [ClientePantallaViajeActivo]: no navegar otra vez al asignar chofer.
+  final bool delegarTransicionEnCursoAlRouter;
+
+  const EsperaAsignacionTurismo({
+    super.key,
+    required this.viajeId,
+    this.delegarTransicionEnCursoAlRouter = false,
+  });
 
   @override
   State<EsperaAsignacionTurismo> createState() =>
@@ -215,6 +221,7 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
   }
 
   void _programarNavegacionViajeActivo(BuildContext context) {
+    if (widget.delegarTransicionEnCursoAlRouter) return;
     if (_navegacionViajeActivoProgramada) return;
     _navegacionViajeActivoProgramada = true;
     _navegarViajeActivoTimer?.cancel();
@@ -1315,10 +1322,15 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
 
     if (!mounted) return;
 
-    await PostViajeClienteNav.abrirFacturaYFlujo(
-      context: context,
-      viajeId: widget.viajeId,
-    );
+    try {
+      await PostViajeClienteNav.abrirFacturaYFlujo(
+        context: context,
+        viajeId: widget.viajeId,
+      );
+    } finally {
+      _postCompletadoEnCurso = false;
+      if (mounted) setState(() {});
+    }
   }
 
   Widget _buildCompletadoState({bool navegandoPostViaje = false}) {
@@ -1924,7 +1936,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
         motivo: 'Cancelado desde espera turismo',
       );
       if (!mounted) return;
-      await NavigationService.clearAndGo(const ClienteShellWithDeepLink());
+      await NavigationService.irAlInicioCliente(
+        context: context,
+        viajeId: widget.viajeId,
+        forzarLimpiarViajeActivo: true,
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

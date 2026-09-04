@@ -15,6 +15,32 @@ class TarifaNucleoResult {
 
 /// Cálculo puro de tramos — no toca Firestore ni promos.
 abstract final class TarifasTramosCalculo {
+  /// A partir de esta distancia (km) aplica el mínimo urbano alto (Carro: RD$200).
+  static const double kmUmbralMinimoUrbano = 2.0;
+
+  static const double minimoCarroDesde2Km = 175.0;
+
+  static double? minimoDesdeUmbralUrbanoPara(String claveVehiculo) {
+    final k = TarifasTramosConfig.normalizarClaveVehiculo(claveVehiculo);
+    if (k == 'Carro') return minimoCarroDesde2Km;
+    return null;
+  }
+
+  static double resolverMinimoAplicado({
+    required double km,
+    required double minimoLocalRd,
+    required double minimoLargaDistanciaRd,
+    required double umbralLargaKm,
+    double? minimoDesdeUmbralUrbano,
+    double umbralMinimoUrbanoKm = kmUmbralMinimoUrbano,
+  }) {
+    if (km > umbralLargaKm) return minimoLargaDistanciaRd;
+    if (minimoDesdeUmbralUrbano != null && km >= umbralMinimoUrbanoKm) {
+      return minimoDesdeUmbralUrbano;
+    }
+    return minimoLocalRd;
+  }
+
   static TarifaNucleoResult calcular({
     required double distanciaKm,
     required double baseRd,
@@ -22,15 +48,27 @@ abstract final class TarifasTramosCalculo {
     required double minimoLocalRd,
     required TarifasTramosConfig tramos,
     required String claveVehiculo,
+    double? minimoDesdeUmbralUrbanoRd,
+    double umbralMinimoUrbanoKm = kmUmbralMinimoUrbano,
   }) {
     final km = distanciaKm.isFinite && distanciaKm > 0 ? distanciaKm : 0.0;
+    final minimoUrbano = minimoDesdeUmbralUrbanoRd ??
+        minimoDesdeUmbralUrbanoPara(claveVehiculo);
 
     if (!tramos.activo || km <= 0) {
+      final minimoRd = resolverMinimoAplicado(
+        km: km,
+        minimoLocalRd: minimoLocalRd,
+        minimoLargaDistanciaRd: minimoLocalRd,
+        umbralLargaKm: double.infinity,
+        minimoDesdeUmbralUrbano: minimoUrbano,
+        umbralMinimoUrbanoKm: umbralMinimoUrbanoKm,
+      );
       return _lineal(
         km: km,
         baseRd: baseRd,
         porKm: porKmLocal,
-        minimoRd: minimoLocalRd,
+        minimoRd: minimoRd,
         modo: 'lineal',
       );
     }
@@ -84,7 +122,14 @@ abstract final class TarifasTramosCalculo {
 
     var nucleo = baseRd + subtotalKm;
     final bool esLarga = km > tramos.tramosKm.first;
-    final minimoAplicado = esLarga ? tramos.minimoLargaDistanciaRd : minimoLocalRd;
+    final minimoAplicado = resolverMinimoAplicado(
+      km: km,
+      minimoLocalRd: minimoLocalRd,
+      minimoLargaDistanciaRd: tramos.minimoLargaDistanciaRd,
+      umbralLargaKm: tramos.tramosKm.first,
+      minimoDesdeUmbralUrbano: minimoUrbano,
+      umbralMinimoUrbanoKm: umbralMinimoUrbanoKm,
+    );
     final antesMinimo = nucleo;
     if (nucleo < minimoAplicado) nucleo = minimoAplicado;
 

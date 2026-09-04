@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart'
     show GeoPoint, Timestamp, FieldValue;
+import 'package:flygo_nuevo/utils/viaje_codigo_verificacion_helper.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/multiparada_ruta_helper.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
@@ -41,6 +42,12 @@ class Viaje {
   final String modelo;
   final String color;
   final bool idaYVuelta;
+
+  /// Ida y vuelta: llegó al destino y falta llevar al cliente de regreso.
+  final bool regresoPendiente;
+
+  /// Ida y vuelta: ya va de vuelta al punto de origen.
+  final bool regresoEnCurso;
 
   // Teléfonos / placa
   final String telefono;
@@ -92,6 +99,9 @@ class Viaje {
   final int multiparadaLegCompletadas;
   final bool multiparadaCompleta;
   final List<Map<String, dynamic>>? multiparadaParadasVisitadas;
+  /// Índices donde el chofer abrió Waze/Maps (`marcarMultiparadaNavAbiertaSeguro`).
+  final List<int> multiparadaParadasAbiertas;
+  final bool multiparadaRecogidaAbierta;
 
   // 👇 NUEVO: Campo extras para información adicional (pasajeros, etc.)
   final Map<String, dynamic>? extras;
@@ -127,6 +137,8 @@ class Viaje {
     this.modelo = '',
     this.color = '',
     this.idaYVuelta = false,
+    this.regresoPendiente = false,
+    this.regresoEnCurso = false,
     this.telefono = '',
     this.placa = '',
     this.estado = EstadosViaje.pendiente,
@@ -156,6 +168,8 @@ class Viaje {
     this.multiparadaLegCompletadas = 0,
     this.multiparadaCompleta = false,
     this.multiparadaParadasVisitadas,
+    this.multiparadaParadasAbiertas = const <int>[],
+    this.multiparadaRecogidaAbierta = false,
     // 👇 NUEVO: extras
     this.extras,
     this.inicioEnRutaEn,
@@ -298,15 +312,7 @@ class Viaje {
 
   /// Compat: camelCase, snake_case o campo usado en acuerdos bola si el doc lo trae.
   static String? _primerCodigoVerificacion(Map<String, dynamic> data) {
-    for (final key in [
-      'codigoVerificacion',
-      'codigo_verificacion',
-      'codigoVerificacionBola'
-    ]) {
-      final s = _asString(data[key]).trim();
-      if (s.isNotEmpty) return s;
-    }
-    return null;
+    return ViajeCodigoVerificacionHelper.pinExistenteEnMap(data);
   }
 
   // ---- Factory/serialización ----
@@ -400,20 +406,39 @@ class Viaje {
                 ),
               )
             : null;
+    final List<int> multiAbiertas = data['multiparadaParadasAbiertas'] is List
+        ? (data['multiparadaParadasAbiertas'] as List)
+            .whereType<num>()
+            .map((num e) => e.toInt())
+            .toList(growable: false)
+        : const <int>[];
+    final bool multiRecogidaAbierta = _asBool(data['multiparadaRecogidaAbierta']);
 
     // 👇 NUEVO: extras (+ campos corporativos en raíz del doc)
     Map<String, dynamic>? extras = data['extras'] is Map
         ? Map<String, dynamic>.from(data['extras'])
         : null;
+    // Multiparada: rutaPuntos/segmentos en raíz del doc (CF) deben verse en navegación.
+    for (final String multiKey in <String>['rutaPuntos', 'segmentos']) {
+      final dynamic rootVal = data[multiKey];
+      if (rootVal is! List || rootVal.isEmpty) continue;
+      extras = Map<String, dynamic>.from(extras ?? <String, dynamic>{});
+      final dynamic exVal = extras[multiKey];
+      if (exVal is! List || exVal.isEmpty) {
+        extras[multiKey] = rootVal;
+      }
+    }
+    if (data['clienteAbordo'] == true) {
+      extras = Map<String, dynamic>.from(extras ?? <String, dynamic>{});
+      extras['clienteAbordo'] = true;
+    }
+    if (data['pickupConfirmadoEn'] != null) {
+      extras = Map<String, dynamic>.from(extras ?? <String, dynamic>{});
+      extras['pickupConfirmadoEn'] = data['pickupConfirmadoEn'];
+    }
     if (data['corporativo'] == true || _asString(data['categoria']) == 'corporativo') {
-      extras = Map<String, dynamic>.from(extras ?? {});
+      extras = Map<String, dynamic>.from(extras ?? <String, dynamic>{});
       extras['corporativo'] = true;
-      if (data['clienteAbordo'] == true) {
-        extras['clienteAbordo'] = true;
-      }
-      if (data['pickupConfirmadoEn'] != null) {
-        extras['pickupConfirmadoEn'] = data['pickupConfirmadoEn'];
-      }
       for (final key in [
         'corporativoEmpresaNombre',
         'corporativoReferencia',
@@ -447,6 +472,31 @@ class Viaje {
       }
     }
 
+    final ({double lat, double lon, String label})? origenRes =
+        MultiparadaRutaHelper.origenParaNavegacion(
+      viajeData: data,
+      latClienteModelo: cliOk ? latCli : latOri,
+      lonClienteModelo: cliOk ? lonCli : lonOri,
+      labelOrigen: _asString(data['origen']),
+    );
+    final double latPickup = origenRes?.lat ?? (cliOk ? latCli : latOri);
+    final double lonPickup = origenRes?.lon ?? (cliOk ? lonCli : lonOri);
+
+    double latDest = _asDouble(data['latDestino']);
+    double lonDest = _asDouble(data['lonDestino']);
+    if (!_validCoord(latDest, lonDest)) {
+      final destRes = MultiparadaRutaHelper.destinoFinalLegParaNavegacion(
+        viajeData: data,
+        latDestinoModelo: latDest,
+        lonDestinoModelo: lonDest,
+        labelDestino: _asString(data['destino']),
+      );
+      if (destRes != null) {
+        latDest = destRes.lat;
+        lonDest = destRes.lon;
+      }
+    }
+
     return Viaje(
       id: id,
       clienteId: _asString(data['clienteId']),
@@ -456,10 +506,10 @@ class Viaje {
       nombreTaxista: _asString(data['nombreTaxista']),
       origen: _asString(data['origen']),
       destino: _asString(data['destino']),
-      latCliente: cliOk ? latCli : latOri,
-      lonCliente: cliOk ? lonCli : lonOri,
-      latDestino: _asDouble(data['latDestino']),
-      lonDestino: _asDouble(data['lonDestino']),
+      latCliente: latPickup,
+      lonCliente: lonPickup,
+      latDestino: latDest,
+      lonDestino: lonDest,
       latTaxista: latDrv,
       lonTaxista: lonDrv,
       precio: _asDouble(data['precio']),
@@ -476,6 +526,8 @@ class Viaje {
       modelo: _asString(data['modelo']),
       color: _asString(data['color']),
       idaYVuelta: _asBool(data['idaYVuelta']),
+      regresoPendiente: _asBool(data['regresoPendiente']),
+      regresoEnCurso: _asBool(data['regresoEnCurso']),
       telefono: tel,
       placa: _asString(data['placa']),
       estado: estadoNorm,
@@ -510,6 +562,8 @@ class Viaje {
       multiparadaLegCompletadas: multiLegCompletadas,
       multiparadaCompleta: multiCompleta,
       multiparadaParadasVisitadas: multiVisitadas,
+      multiparadaParadasAbiertas: multiAbiertas,
+      multiparadaRecogidaAbierta: multiRecogidaAbierta,
 
       // 👇 NUEVO: extras
       extras: extras,
@@ -550,6 +604,8 @@ class Viaje {
       'modelo': modelo,
       'color': color,
       'idaYVuelta': idaYVuelta,
+      'regresoPendiente': regresoPendiente,
+      'regresoEnCurso': regresoEnCurso,
 
       // compat teléfono
       'telefono': telefono,
@@ -750,6 +806,8 @@ class Viaje {
     String? modelo,
     String? color,
     bool? idaYVuelta,
+    bool? regresoPendiente,
+    bool? regresoEnCurso,
     String? telefono,
     String? placa,
     String? estado,
@@ -805,6 +863,8 @@ class Viaje {
       modelo: modelo ?? this.modelo,
       color: color ?? this.color,
       idaYVuelta: idaYVuelta ?? this.idaYVuelta,
+      regresoPendiente: regresoPendiente ?? this.regresoPendiente,
+      regresoEnCurso: regresoEnCurso ?? this.regresoEnCurso,
       telefono: telefono ?? this.telefono,
       placa: placa ?? this.placa,
       estado: estado ?? this.estado,

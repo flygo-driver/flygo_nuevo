@@ -22,6 +22,7 @@ import '../../servicios/taxista_operacion_gate.dart';
 import '../../navegacion/taxista_operacion_nav.dart';
 import '../../utils/viaje_pool_taxista_gate.dart';
 import '../../utils/multiparada_ruta_helper.dart';
+import 'package:flygo_nuevo/utils/viaje_navegacion_resolver.dart';
 import '../../servicios/navegacion_externa_launcher.dart';
 import '../../servicios/navigation_service.dart';
 import '../../servicios/active_trip_service.dart';
@@ -112,12 +113,11 @@ class _DetalleViajeState extends State<DetalleViaje> {
           ? 'GPS: ${latCliente.toStringAsFixed(5)}, ${lonCliente.toStringAsFixed(5)}'
           : null,
       showSinGpsBanner: !hayCoords,
+      wazeHabilitado: hayCoords,
       footerHint: 'Elige Waze o Google Maps.',
       onWaze: () {
         if (hayCoords) {
           NavegacionExternaLauncher.abrirWazeDestino(latCliente, lonCliente);
-        } else {
-          NavegacionExternaLauncher.abrirWazeBusqueda(origen);
         }
       },
       onMaps: () {
@@ -515,10 +515,28 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
                   final origen = (d['origen'] ?? '').toString();
                   final destino = (d['destino'] ?? '').toString();
-                  final latOrigen = _asDouble(d['latCliente']);
-                  final lonOrigen = _asDouble(d['lonCliente']);
-                  final latDestino = _asDouble(d['latDestino']);
-                  final lonDestino = _asDouble(d['lonDestino']);
+                  final latClienteRaw = _asDouble(d['latCliente']);
+                  final lonClienteRaw = _asDouble(d['lonCliente']);
+                  final latDestinoRaw = _asDouble(d['latDestino']);
+                  final lonDestinoRaw = _asDouble(d['lonDestino']);
+
+                  final origenRes = MultiparadaRutaHelper.origenParaNavegacion(
+                    viajeData: d,
+                    latClienteModelo: latClienteRaw,
+                    lonClienteModelo: lonClienteRaw,
+                    labelOrigen: origen,
+                  );
+                  final destRes =
+                      MultiparadaRutaHelper.destinoFinalLegParaNavegacion(
+                    viajeData: d,
+                    latDestinoModelo: latDestinoRaw,
+                    lonDestinoModelo: lonDestinoRaw,
+                    labelDestino: destino,
+                  );
+                  final double latOrigen = origenRes?.lat ?? latClienteRaw;
+                  final double lonOrigen = origenRes?.lon ?? lonClienteRaw;
+                  final double latDestino = destRes?.lat ?? latDestinoRaw;
+                  final double lonDestino = destRes?.lon ?? lonDestinoRaw;
 
                   final precio = _asDouble(d['precio']);
                   final tipoServicio =
@@ -607,14 +625,10 @@ class _DetalleViajeState extends State<DetalleViaje> {
 
                   final List<Map<String, dynamic>> waypointsOrdenados =
                       MultiparadaRutaHelper.waypointsDesdeDoc(d);
-                  final bool hayOrigenMapa = latOrigen != 0 &&
-                      lonOrigen != 0 &&
-                      latOrigen.abs() <= 90 &&
-                      lonOrigen.abs() <= 180;
-                  final bool hayDestinoMapa = latDestino != 0 &&
-                      lonDestino != 0 &&
-                      latDestino.abs() <= 90 &&
-                      lonDestino.abs() <= 180;
+                  final bool hayOrigenMapa =
+                      MultiparadaRutaHelper.coordsValidas(latOrigen, lonOrigen);
+                  final bool hayDestinoMapa =
+                      MultiparadaRutaHelper.coordsValidas(latDestino, lonDestino);
                   final List<LatLng> puntosRuta = <LatLng>[];
                   if (hayOrigenMapa) {
                     puntosRuta.add(LatLng(latOrigen, lonOrigen));

@@ -132,6 +132,47 @@ export function assertMultiparadaCompletaParaFinalizar(d: AnyMap): void {
   );
 }
 
+function visitadosMultiparadaSet(d: AnyMap): Set<number> {
+  const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
+    ? (d.multiparadaParadasVisitadas as AnyMap[])
+    : [];
+  const visitados = new Set<number>();
+  for (const item of visitadas) {
+    const idx = Math.trunc(Number(item.legIndex));
+    if (Number.isFinite(idx) && idx >= 0) visitados.add(idx);
+  }
+  return visitados;
+}
+
+/** Paradas donde el chofer ya abrió Waze/Maps (incluye confirmadas). */
+export function multiparadaParadasAbiertasSet(
+  d: AnyMap,
+  total: number,
+): Set<number> {
+  const raw = d.multiparadaParadasAbiertas;
+  const abiertas = Array.isArray(raw)
+    ? new Set(
+        raw
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x))
+          .map((x) => Math.trunc(x))
+          .filter((i) => i >= 0 && i < total),
+      )
+    : new Set<number>();
+  for (const i of visitadosMultiparadaSet(d)) {
+    if (i >= 0 && i < total) abiertas.add(i);
+  }
+  return abiertas;
+}
+
+export function multiparadaRecogidaAbierta(d: AnyMap): boolean {
+  if (d.multiparadaRecogidaAbierta === true) return true;
+  return (
+    d.clienteAbordo === true ||
+    d.pickupConfirmadoEn != null ||
+    d.corporativoRecogidaAbierta === true
+  );
+}
+
 /** Al iniciar ruta (`iniciarViajeSeguro`) inicializa contadores en el doc. */
 export function multiparadaInitPatch(d: AnyMap): Record<string, unknown> | null {
   const total = totalLegsMultiparada(d);
@@ -143,12 +184,17 @@ export function multiparadaInitPatch(d: AnyMap): Record<string, unknown> | null 
   const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
     ? d.multiparadaParadasVisitadas
     : [];
+  const abiertas = Array.isArray(d.multiparadaParadasAbiertas)
+    ? d.multiparadaParadasAbiertas
+    : [];
   // No borrar paradas ya confirmadas al pasar a `en_curso`.
   if (done > 0 || visitadas.length > 0) {
     return {
       multiparadaLegsTotal: total,
       multiparadaLegCompletadas: done,
       multiparadaParadasVisitadas: visitadas,
+      multiparadaParadasAbiertas: abiertas,
+      multiparadaRecogidaAbierta: multiparadaRecogidaAbierta(d),
       multiparadaCompleta: d.multiparadaCompleta === true || done >= total,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
@@ -158,6 +204,8 @@ export function multiparadaInitPatch(d: AnyMap): Record<string, unknown> | null 
     multiparadaLegsTotal: total,
     multiparadaLegCompletadas: 0,
     multiparadaParadasVisitadas: [],
+    multiparadaParadasAbiertas: [],
+    multiparadaRecogidaAbierta: false,
     multiparadaCompleta: false,
     multiparadaCompletaEn: FieldValue.delete(),
   };
@@ -172,8 +220,9 @@ async function rolTaxistaOAdmin(uid: string): Promise<string> {
 }
 
 /**
- * Conductor registra llegada al destino actual de una ruta multiparada.
- * Secuencial e idempotente por índice de leg.
+ * Conductor registra llegada a una parada de ruta multiparada.
+ * Con `legIndex` opcional: orden libre (estilo corporativo compartido).
+ * Sin `legIndex`: primera parada pendiente (apps anteriores).
  */
 export const registrarLegMultiparadaSeguro = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -222,8 +271,17 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
       typeof d.multiparadaLegsTotal === "number" && (d.multiparadaLegsTotal as number) > 0
         ? Math.trunc(d.multiparadaLegsTotal as number)
         : totalLegsMultiparada(d);
-    const done =
-      typeof d.multiparadaLegCompletadas === "number"
+    const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
+      ? [...(d.multiparadaParadasVisitadas as AnyMap[])]
+      : [];
+    const visitados = new Set<number>();
+    for (const item of visitadas) {
+      const idx = Math.trunc(Number((item as AnyMap).legIndex));
+      if (Number.isFinite(idx) && idx >= 0) visitados.add(idx);
+    }
+    const done = visitados.size > 0
+      ? visitados.size
+      : typeof d.multiparadaLegCompletadas === "number"
         ? Math.trunc(d.multiparadaLegCompletadas as number)
         : 0;
 
@@ -231,15 +289,52 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
       return { ok: true, viajeId, alreadyComplete: true, legCompletadas: done, legsTotal: total };
     }
 
-    const legIndex = done;
+    const legIndexRaw = request.data?.legIndex;
+    let legIndex: number;
+    if (legIndexRaw !== undefined && legIndexRaw !== null && legIndexRaw !== "") {
+      legIndex = Math.trunc(Number(legIndexRaw));
+      if (!Number.isFinite(legIndex)) {
+        throw new HttpsError("invalid-argument", "legIndex inválido.");
+      }
+      if (legIndex < 0 || legIndex >= total) {
+        throw new HttpsError("failed-precondition", "Índice de parada fuera de rango.");
+      }
+      if (visitados.has(legIndex)) {
+        return {
+          ok: true,
+          viajeId,
+          alreadyVisited: true,
+          legIndex,
+          legCompletadas: done,
+          legsTotal: total,
+        };
+      }
+    } else {
+      legIndex = -1;
+      for (let i = 0; i < total; i++) {
+        if (!visitados.has(i)) {
+          legIndex = i;
+          break;
+        }
+      }
+      if (legIndex < 0) {
+        return { ok: true, viajeId, alreadyComplete: true, legCompletadas: done, legsTotal: total };
+      }
+    }
+
     const leg = legEsperada(d, legIndex);
     if (!leg) {
       throw new HttpsError("failed-precondition", "Destino de parada inválido o sin coordenadas.");
     }
 
-    const visitadas = Array.isArray(d.multiparadaParadasVisitadas)
-      ? [...(d.multiparadaParadasVisitadas as AnyMap[])]
-      : [];
+    const abiertas = multiparadaParadasAbiertasSet(d, total);
+    if (!abiertas.has(legIndex)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Abrí Waze o Maps a esta parada antes de marcar la llegada.",
+      );
+    }
+
     const latGps = numCoord(request.data?.lat);
     const lonGps = numCoord(request.data?.lon);
     visitadas.push({
@@ -255,7 +350,7 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
         : {}),
     });
 
-    const newDone = legIndex + 1;
+    const newDone = visitadas.length;
     const completa = newDone >= total;
 
     const patch: Record<string, unknown> = {
@@ -313,4 +408,104 @@ export const registrarLegMultiparadaSeguro = onCall(async (request) => {
   }
 
   return result;
+});
+
+/**
+ * Chofer multiparada: registra que abrió Waze/Maps en origen o parada (estilo corp.).
+ * Obligatorio antes de `registrarLegMultiparadaSeguro`.
+ */
+export const marcarMultiparadaNavAbiertaSeguro = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  const viajeId = String(request.data?.viajeId ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId.");
+
+  const accion = String(request.data?.accion ?? "marcar_abierta")
+    .trim()
+    .toLowerCase();
+  if (accion !== "marcar_abierta" && accion !== "marcar_recogida_abierta") {
+    throw new HttpsError("invalid-argument", "Acción no válida.");
+  }
+
+  const rol = await rolTaxistaOAdmin(uid);
+  if (rol !== "taxista" && rol !== "admin") {
+    throw new HttpsError(
+      "permission-denied",
+      "Solo el conductor asignado puede registrar navegación.",
+    );
+  }
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(viajeRef);
+    if (!snap.exists) throw new HttpsError("not-found", "Viaje no encontrado.");
+    const d = (snap.data() ?? {}) as AnyMap;
+
+    const uidTx = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
+    if (rol !== "admin" && uidTx !== uid) {
+      throw new HttpsError("permission-denied", "No autorizado para este viaje.");
+    }
+
+    if (!esViajeMultiparada(d)) {
+      throw new HttpsError("failed-precondition", "Este viaje no tiene paradas múltiples.");
+    }
+
+    if (d.completado === true || d.multiparadaCompleta === true) {
+      return { ok: true, viajeId, yaCompleto: true };
+    }
+
+    const estado = String(d.estado ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+    const codigoOk = d.codigoVerificado === true;
+    const estadoOk = estado === "en_curso" || (estado === "a_bordo" && codigoOk);
+    if (!estadoOk) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Solo podés registrar navegación con el viaje en curso.",
+      );
+    }
+
+    const now = FieldValue.serverTimestamp();
+    const patch: Record<string, unknown> = {
+      updatedAt: now,
+      actualizadoEn: now,
+    };
+
+    if (accion === "marcar_recogida_abierta") {
+      if (multiparadaRecogidaAbierta(d)) {
+        return { ok: true, viajeId, recogidaAbierta: true };
+      }
+      patch.multiparadaRecogidaAbierta = true;
+      patch.multiparadaRecogidaAbiertaEn = now;
+      if (estado !== "en_curso") {
+        patch.estado = "en_curso";
+      }
+      tx.update(viajeRef, patch);
+      return { ok: true, viajeId, recogidaAbierta: true };
+    }
+
+    const total =
+      typeof d.multiparadaLegsTotal === "number" && (d.multiparadaLegsTotal as number) > 0
+        ? Math.trunc(d.multiparadaLegsTotal as number)
+        : totalLegsMultiparada(d);
+    const legIndex = Math.trunc(Number(request.data?.legIndex ?? -1));
+    if (!Number.isFinite(legIndex) || legIndex < 0 || legIndex >= total) {
+      throw new HttpsError("invalid-argument", "Parada inválida.");
+    }
+
+    const abiertas = multiparadaParadasAbiertasSet(d, total);
+    if (abiertas.has(legIndex)) {
+      return { ok: true, viajeId, legIndex, yaAbierta: true };
+    }
+    abiertas.add(legIndex);
+    patch.multiparadaParadasAbiertas = [...abiertas]
+      .filter((i) => i >= 0 && i < total)
+      .sort((a, b) => a - b);
+    patch.multiparadaParadaAbiertaEn = now;
+    if (estado !== "en_curso") {
+      patch.estado = "en_curso";
+    }
+    tx.update(viajeRef, patch);
+    return { ok: true, viajeId, legIndex, yaAbierta: false };
+  });
 });

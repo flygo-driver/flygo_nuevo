@@ -1,22 +1,15 @@
 import 'package:flutter/material.dart';
 
-import 'package:flygo_nuevo/servicios/finance_config_service.dart';
-import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/widgets/datos_transferencia_conductor_panel.dart';
 import 'package:flygo_nuevo/widgets/datos_transferencia_rai_panel.dart';
 
-/// UI transferencia: cuenta RAI + referencia (Fase 5) vs cuenta conductor (legacy).
+/// UI transferencia en viajes taxi: el cliente paga al conductor.
+/// Giras con recaudo central RAI usan pantallas propias (`pools_cliente_detalle`).
 class TransferenciaRecaudoUi {
   TransferenciaRecaudoUi._();
 
-  static bool viajeUsaRecaudoEnCuentaRai(Map<String, dynamic> viajeData) {
-    final ref = (viajeData['referenciaRecaudo'] ?? '').toString().trim();
-    if (ref.isNotEmpty) return true;
-    final destino = (viajeData['recaudoDestino'] ?? '').toString().trim().toLowerCase();
-    if (destino == 'rai') return true;
-    return FinanceConfigService.transferenciaRecaudoEnCuentaRai &&
-        MetodoPagoViaje.esTransferencia(viajeData['metodoPago']?.toString());
-  }
+  /// Siempre `false` en flujo viaje: la transferencia va a la cuenta del taxista.
+  static bool viajeUsaRecaudoEnCuentaRai(Map<String, dynamic> viajeData) => false;
 
   static String referenciaDesdeViaje(Map<String, dynamic> viajeData) {
     return (viajeData['referenciaRecaudo'] ?? '').toString().trim();

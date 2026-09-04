@@ -164,7 +164,7 @@ class _AdminTarifasState extends State<AdminTarifas> {
 
       // Cargar valores de vehículos normales
       _carroBaseCtrl.text = _getValor(general, 'Carro', 'base', '50.0');
-      _carroPorKmCtrl.text = _getValor(general, 'Carro', 'porKm', '25.0');
+      _carroPorKmCtrl.text = _getValor(general, 'Carro', 'porKm', '22.0');
       _carroMinimoCtrl.text = _getValor(general, 'Carro', 'minimo', '150.0');
 
       _jeepetaBaseCtrl.text = _getValor(general, 'Jeepeta', 'base', '80.0');

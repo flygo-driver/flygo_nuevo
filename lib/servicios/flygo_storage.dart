@@ -67,6 +67,100 @@ class FlygoStorage {
     }
   }
 
+  static const String tipoSelfieVerificacionCliente = 'verificacion_identidad';
+
+  static Future<String> uploadSelfieVerificacionCliente({
+    required User user,
+    required Uint8List bytes,
+  }) async {
+    await FirebaseBootstrap.ensureInitialized();
+    await logDiagnostics();
+    await user.getIdToken(true);
+
+    final int ts = DateTime.now().millisecondsSinceEpoch;
+    final String storagePath =
+        'perfiles/${user.uid}/verificacion_$ts.jpg';
+    final Reference ref = instance.ref(storagePath);
+    final SettableMetadata meta = SettableMetadata(
+      contentType: 'image/jpeg',
+      customMetadata: <String, String>{
+        'uid': user.uid,
+        'tipo': tipoSelfieVerificacionCliente,
+      },
+    );
+
+    log('selfie cliente path=$storagePath bytes=${bytes.length}');
+
+    Future<String> putDataIntento() async {
+      await user.getIdToken(true);
+      await ref.putData(bytes, meta);
+      return ref.getDownloadURL();
+    }
+
+    try {
+      return await putDataIntento();
+    } on FirebaseException catch (e) {
+      log('selfie putData error code=${e.code} msg=${e.message}');
+      if (e.code == 'unauthenticated' ||
+          e.code == 'unknown' ||
+          e.code == 'retry-limit-exceeded') {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        try {
+          return await putDataIntento();
+        } on FirebaseException {
+          return _fallbackSelfieVerificacionCliente(
+            user: user,
+            bytes: bytes,
+          );
+        }
+      }
+      if (e.code == 'permission-denied') {
+        return _fallbackSelfieVerificacionCliente(
+          user: user,
+          bytes: bytes,
+        );
+      }
+      rethrow;
+    } catch (e) {
+      log('selfie putData error general: $e');
+      return _fallbackSelfieVerificacionCliente(
+        user: user,
+        bytes: bytes,
+      );
+    }
+  }
+
+  static Future<String> _fallbackSelfieVerificacionCliente({
+    required User user,
+    required Uint8List bytes,
+  }) async {
+    try {
+      final int ts = DateTime.now().millisecondsSinceEpoch;
+      final String storagePath =
+          'perfiles/${user.uid}/verificacion_$ts.jpg';
+      return await _uploadViaRestApi(
+        user: user,
+        storagePath: storagePath,
+        bytes: bytes,
+        tipo: tipoSelfieVerificacionCliente,
+      );
+    } on FirebaseException catch (e) {
+      log('selfie REST falló code=${e.code} → firestore fallback');
+      return _uploadViaFirestoreFallback(
+        user: user,
+        tipo: tipoSelfieVerificacionCliente,
+        bytes: bytes,
+      );
+    } catch (e) {
+      log('selfie REST error: $e → firestore fallback');
+      return _uploadViaFirestoreFallback(
+        user: user,
+        tipo: tipoSelfieVerificacionCliente,
+        bytes: bytes,
+      );
+    }
+  }
+
   static Future<String> uploadDocumentoTaxista({
     required User user,
     required String tipo,

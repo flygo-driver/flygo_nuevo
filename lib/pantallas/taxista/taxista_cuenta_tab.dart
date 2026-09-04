@@ -23,6 +23,8 @@ import 'package:flygo_nuevo/servicios/theme_mode_service.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/widgets/avatar_circle.dart';
 import 'package:flygo_nuevo/widgets/configuracion_bancaria.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_taxista_service.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_ui_constants.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 import 'package:flygo_nuevo/widgets/rai_driver_ui.dart';
@@ -391,16 +393,30 @@ class TaxistaCuentaTab extends StatelessWidget {
             _CuentaSection(
               title: 'Ajustes',
               children: [
-                _CuentaMenuRow(
-                  icon: Icons.location_on_rounded,
-                  iconBg: const Color(0xFF16A34A).withValues(alpha: 0.14),
-                  iconFg: const Color(0xFF16A34A),
-                  title: 'Ubicación',
-                  subtitle: 'Permisos GPS y ajustes del teléfono',
-                  onTap: () => _openPage(
-                    context,
-                    const RaiUbicacionAjustesPage(rol: RaiUbicacionRol.taxista),
-                  ),
+                ValueListenableBuilder<RaiUbicacionTaxistaModo>(
+                  valueListenable: RaiUbicacionTaxistaService.instance.modo,
+                  builder: (context, modo, _) {
+                    final listo =
+                        modo == RaiUbicacionTaxistaModo.listo;
+                    return _CuentaMenuRow(
+                      icon: Icons.location_on_rounded,
+                      iconBg: const Color(0xFF16A34A).withValues(alpha: 0.14),
+                      iconFg: listo
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFFDC2626),
+                      title: 'Ubicación',
+                      subtitle: listo
+                          ? RaiUbicacionUiConstants
+                              .subtituloConfigUbicacionActiva
+                          : 'Permisos GPS y ajustes del teléfono',
+                      onTap: () => _openPage(
+                        context,
+                        const RaiUbicacionAjustesPage(
+                          rol: RaiUbicacionRol.taxista,
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 _CuentaMenuRow(
                   icon: Icons.person_rounded,

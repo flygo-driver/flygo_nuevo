@@ -88,40 +88,56 @@ abstract final class NegocioAliadoAdminRepo {
     final c = codigo.trim().toUpperCase();
     if (c.isEmpty) return <NegocioAliadoViajeComision>[];
 
-    final snap = await _db
-        .collection('viajes')
-        .where('negocioAliadoCodigo', isEqualTo: c)
-        .where('completado', isEqualTo: true)
-        .limit(300)
-        .get();
-
     final lista = <NegocioAliadoViajeComision>[];
-    for (final doc in snap.docs) {
-      final d = doc.data();
-      if (d['negocioAliadoPromoContabilizado'] != true) continue;
-      final comCents = _int(d['negocioAliadoComisionNegocioCents']);
-      final nominalCents = _int(d['precioNominalCents'] ?? d['precio_cents']);
-      final taxistaCents = _int(d['comision_cents']);
-      final pctTaxista = _dbl(
-        d['negocioAliadoPctComisionTaxista'] ?? d['comisionPorcentaje'] ?? 15,
-      );
-      lista.add(
-        NegocioAliadoViajeComision(
-          viajeId: doc.id,
-          origen: (d['origen'] ?? '').toString(),
-          destino: (d['destino'] ?? '').toString(),
-          precioNominalRd: nominalCents / 100.0,
-          comisionNegocioRd: comCents > 0
-              ? comCents / 100.0
-              : _dbl(d['negocioAliadoComisionNegocioRd']),
-          comisionTaxistaRd: taxistaCents / 100.0,
-          comisionTaxistaPct: pctTaxista,
-          metodoPago: (d['metodoPago'] ?? '').toString(),
-          esGratis: d['negocioAliadoPromoGratis'] == true,
-          finalizadoAt: _ts(d['finalizadoEn']),
-          pagada: d['negocioAliadoComisionPagada'] == true,
-        ),
-      );
+    DocumentSnapshot<Map<String, dynamic>>? last;
+    const pageSize = 200;
+    const maxPages = 5;
+
+    for (int page = 0; page < maxPages; page++) {
+      Query<Map<String, dynamic>> q = _db
+          .collection('viajes')
+          .where('negocioAliadoCodigo', isEqualTo: c)
+          .where('completado', isEqualTo: true)
+          .limit(pageSize);
+      if (last != null) {
+        q = q.startAfterDocument(last);
+      }
+
+      final snap = await q.get();
+      if (snap.docs.isEmpty) break;
+      last = snap.docs.last;
+
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        if (d['negocioAliadoPromoContabilizado'] != true) continue;
+        final comCents = _int(d['negocioAliadoComisionNegocioCents']);
+        final nominalCents = _int(d['precioNominalCents'] ?? d['precio_cents']);
+        final taxistaCents = _int(d['comision_cents']);
+        final pctTaxista = _dbl(
+          d['negocioAliadoPctComisionTaxista'] ??
+              d['comisionPorcentaje'] ??
+              15,
+        );
+        lista.add(
+          NegocioAliadoViajeComision(
+            viajeId: doc.id,
+            origen: (d['origen'] ?? '').toString(),
+            destino: (d['destino'] ?? '').toString(),
+            precioNominalRd: nominalCents / 100.0,
+            comisionNegocioRd: comCents > 0
+                ? comCents / 100.0
+                : _dbl(d['negocioAliadoComisionNegocioRd']),
+            comisionTaxistaRd: taxistaCents / 100.0,
+            comisionTaxistaPct: pctTaxista,
+            metodoPago: (d['metodoPago'] ?? '').toString(),
+            esGratis: d['negocioAliadoPromoGratis'] == true,
+            finalizadoAt: _ts(d['finalizadoEn']),
+            pagada: d['negocioAliadoComisionPagada'] == true,
+          ),
+        );
+      }
+
+      if (snap.docs.length < pageSize) break;
     }
     lista.sort((a, b) => (b.finalizadoAt ?? DateTime(1970))
         .compareTo(a.finalizadoAt ?? DateTime(1970)));

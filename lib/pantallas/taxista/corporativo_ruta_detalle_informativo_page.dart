@@ -36,7 +36,8 @@ class CorporativoRutaDetalleInformativoPage extends StatefulWidget {
 }
 
 class _CorporativoRutaDetalleInformativoPageState
-    extends State<CorporativoRutaDetalleInformativoPage> {
+    extends State<CorporativoRutaDetalleInformativoPage>
+    with WidgetsBindingObserver {
   bool _busy = false;
   bool _finalizando = false;
   bool _expulsandoRuta = false;
@@ -46,6 +47,8 @@ class _CorporativoRutaDetalleInformativoPageState
   /// Paradas donde el chofer ya eligió Waze/Maps en esta sesión (antes del ack del servidor).
   final Set<int> _paradasNavegadasEnSesion = <int>{};
   bool _recogidaNavegadaEnSesion = false;
+  /// Salida intencional (finalizar / dejar ruta / expulsión): permite pop.
+  bool _permitirSalirRuta = false;
 
   String get _uidOperativo =>
       (FirebaseAuth.instance.currentUser?.uid ?? widget.uidTaxista).trim();
@@ -65,8 +68,44 @@ class _CorporativoRutaDetalleInformativoPageState
   ];
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(widget.viajeId);
+    ActiveTripService.registrarViajeOperativoTaxista(widget.viajeId);
+    ActiveTripService.markTaxistaTripScreenMounted();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ActiveTripService.markTaxistaTripScreenUnmounted();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      CorporativoTaxistaService.limpiarDismissRutaCorpInformativa(
+        widget.viajeId,
+      );
+      ActiveTripService.registrarViajeOperativoTaxista(widget.viajeId);
+      ActiveTripService.markTaxistaTripScreenMounted();
+    }
+  }
+
+  void _avisoRutaSigueActiva() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'La ruta corporativa sigue activa. Usá «Dejar ruta» solo si no podés '
+          'continuar. Podés abrir Waze o Maps y volver aquí.',
+        ),
+        duration: Duration(seconds: 4),
+        backgroundColor: Color(0xFF1B5E20),
+      ),
+    );
   }
 
   Future<void> _alSalirDeRuta({Map<String, dynamic>? viajeData}) async {
@@ -76,6 +115,7 @@ class _CorporativoRutaDetalleInformativoPageState
     );
     ActiveTripService.cancelarMantenimientoOverlayViaje();
     ActiveTripService.cancelarBloqueoShellTaxista();
+    ActiveTripService.markTaxistaTripScreenUnmounted();
     ActiveTripService.notificarRebuildShell();
     await ViajesRepo.limpiarViajeActivoSiNoOperativo(widget.uidTaxista);
     unawaited(
@@ -95,6 +135,8 @@ class _CorporativoRutaDetalleInformativoPageState
         duration: const Duration(seconds: 4),
       ),
     );
+    _permitirSalirRuta = true;
+    if (!mounted) return;
     final nav = Navigator.of(context);
     if (nav.canPop()) nav.pop();
   }
@@ -562,6 +604,7 @@ class _CorporativoRutaDetalleInformativoPageState
       );
       await _alSalirDeRuta(viajeData: d);
       if (!mounted) return;
+      _permitirSalirRuta = true;
       final nav = Navigator.of(context);
       if (nav.canPop()) nav.pop();
 
@@ -690,10 +733,11 @@ class _CorporativoRutaDetalleInformativoPageState
     }
 
     try {
-      await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
-      await ChatRepo.ensureViajeChatParticipantes(
+      await ChatRepo.prepareViajeChat(
         viajeId: widget.viajeId,
-        participantes: {miUid, encargadoUid},
+        uidA: miUid,
+        uidB: encargadoUid,
+        participantesExtra: {miUid, encargadoUid},
       );
     } catch (e) {
       if (!mounted) return;
@@ -735,8 +779,9 @@ class _CorporativoRutaDetalleInformativoPageState
   @override
   Widget build(BuildContext context) {
     return PopScope(
+      canPop: _permitirSalirRuta,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) unawaited(_alSalirDeRuta());
+        if (!didPop) _avisoRutaSigueActiva();
       },
       child: Scaffold(
       backgroundColor: _fondo,
@@ -746,6 +791,7 @@ class _CorporativoRutaDetalleInformativoPageState
         elevation: 0,
         leading: RaiBackButton(
           color: RaiBackButton.resolveColor(context, superficie: _fondo),
+          onPressed: _avisoRutaSigueActiva,
         ),
         automaticallyImplyLeading: false,
         title: Row(

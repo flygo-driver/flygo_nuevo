@@ -77,7 +77,91 @@ function esViajeCorporativoBoarding(data: AnyMap): boolean {
   return false;
 }
 
+function respuestaEnsurePinViaje(data: AnyMap, pin: string, existed: boolean) {
+  return {
+    ok: true,
+    pin,
+    existed,
+    estado: String(data.estado ?? "").trim(),
+    clienteAbordo: data.clienteAbordo === true,
+    codigoVerificado: data.codigoVerificado === true,
+  };
+}
+
+async function actorAutorizadoParaViaje(
+  actorUid: string,
+  viajeId: string,
+  data: AnyMap,
+): Promise<boolean> {
+  const uidCliente = String(data.uidCliente ?? data.clienteId ?? "").trim();
+  const uidTaxista = String(data.uidTaxista ?? data.taxistaId ?? "").trim();
+  if (actorUid === uidCliente || actorUid === uidTaxista) return true;
+  const role = await getRole(actorUid);
+  if (role === "admin") return true;
+  const userSnap = await db().collection("usuarios").doc(actorUid).get();
+  const u = (userSnap.data() ?? {}) as AnyMap;
+  const viajeActivoId = String(u.viajeActivoId ?? "").trim();
+  const siguienteViajeId = String(u.siguienteViajeId ?? "").trim();
+  return viajeActivoId === viajeId || siguienteViajeId === viajeId;
+}
+
+/** Lectura autoritativa del viaje para el cliente (vía viajeActivoId o uidCliente). */
+export const syncViajeEstadoCliente = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const actorUid = request.auth.uid;
+  const viajeId = String(request.data?.viajeId ?? request.data?.tripId ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  const snap = await viajeRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Viaje no existe");
+  const data = (snap.data() ?? {}) as AnyMap;
+
+  if (!(await actorAutorizadoParaViaje(actorUid, viajeId, data))) {
+    throw new HttpsError("permission-denied", "No autorizado para este viaje");
+  }
+
+  const pin = pinVerificacionDelViaje(data);
+  return {
+    ok: true,
+    pin: pin.length === 6 ? pin : "",
+    estado: String(data.estado ?? "").trim(),
+    clienteAbordo: data.clienteAbordo === true,
+    codigoVerificado: data.codigoVerificado === true,
+  };
+});
+
 // Genera / renueva PIN de abordaje (6 dígitos, mismo criterio que codigoVerificacion del pool).
+export const ensureViajeCodigoVerificacion = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const actorUid = request.auth.uid;
+  const viajeId = String(request.data?.viajeId ?? request.data?.tripId ?? "").trim();
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  const snap = await viajeRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Viaje no existe");
+  const data = (snap.data() ?? {}) as AnyMap;
+  if (!(await actorAutorizadoParaViaje(actorUid, viajeId, data))) {
+    throw new HttpsError("permission-denied", "No autorizado para este viaje");
+  }
+
+  let pin = pinVerificacionDelViaje(data);
+  if (pin.length === 6) {
+    return respuestaEnsurePinViaje(data, pin, true);
+  }
+
+  pin = generarPinVerificacionSeisDigitos();
+  await viajeRef.update({
+    codigoVerificacion: pin,
+    codigoVerificado: false,
+    updatedAt: FieldValue.serverTimestamp(),
+    actualizadoEn: FieldValue.serverTimestamp(),
+  });
+  const fresh = (await viajeRef.get()).data() ?? data;
+  return respuestaEnsurePinViaje(fresh as AnyMap, pin, false);
+});
+
 export const issueBoardingPin = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
   const actorUid = request.auth.uid;

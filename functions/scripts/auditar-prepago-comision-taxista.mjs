@@ -118,7 +118,7 @@ async function cargarConfig(db) {
   return {
     minimoOperativoRd: num(prep.minimoOperativoRd) || MIN_SALDO_PREPAGO_RD,
     umbralPreventivoRd: num(prep.umbralPreventivoRd) || 250,
-    permitirViajeConPrepagoParcial: prep.permitirViajeConPrepagoParcial !== false,
+    permitirViajeConPrepagoParcial: prep.permitirViajeConPrepagoParcial === true,
     comisionPct: pct,
     financeExists: finSnap.exists,
   };
@@ -458,7 +458,14 @@ if (fallos.length === 0) {
   if (repairMode) {
     try {
       const mod = await import("../lib/finance.js");
+      const sanearFn = mod.sanearPrepagoViajesTaxistaCompletados;
       const syncFn = mod.syncTaxistaBloqueoOperativo;
+      if (typeof sanearFn === "function") {
+        const heal = await sanearFn(uidTaxista);
+        console.log(
+          `\n  HEAL PREPAGO: ${heal.viajesSanados}/${heal.viajesRevisados} viaje(s) completado(s) con ledger aplicado`,
+        );
+      }
       if (typeof syncFn !== "function") throw new Error("syncTaxistaBloqueoOperativo no exportado");
       const tiene = await syncFn(uidTaxista);
       console.log(`\n  REPARACIÓN: syncTaxistaBloqueoOperativo → tienePagoPendiente=${tiene}`);

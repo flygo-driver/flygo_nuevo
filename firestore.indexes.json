@@ -718,6 +718,24 @@
       ]
     },
     {
+      "collectionGroup": "operaciones_mensajes_adm",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "viajeId", "order": "ASCENDING" },
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "operaciones_mensajes_adm",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "viajeId", "order": "ASCENDING" },
+        { "fieldPath": "uidCliente", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "viajes",
       "queryScope": "COLLECTION",
       "fields": [
@@ -814,6 +832,14 @@
       "fields": [
         { "fieldPath": "negocioAliadoCodigo", "order": "ASCENDING" },
         { "fieldPath": "completado", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lugares_populares_flygo",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "region", "order": "ASCENDING" },
+        { "fieldPath": "count", "order": "DESCENDING" }
       ]
     }
   ],

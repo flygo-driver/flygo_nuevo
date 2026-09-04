@@ -213,15 +213,7 @@ class AsignacionTurismoRepo {
             uSnap.data(), bSnap.data())) {
           throw 'chofer-bloqueo-prepago';
         }
-        // Misma regla que claim / pool: prepago libre ≥ comisión estimada de este viaje.
-        final String? prepViaje =
-            PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
-          billeData: bSnap.data(),
-          viajeData: Map<String, dynamic>.from(vData),
-        );
-        if (prepViaje != null) {
-          throw prepViaje;
-        }
+        // Turismo: no exigir prepago completo al asignar; comisión al finalizar viaje.
 
         final Map<String, dynamic> updViaje = {
           'uidTaxista': uidChofer,
@@ -399,15 +391,19 @@ class AsignacionTurismoRepo {
   }
 
   /// Chofer confirmó el viaje (aceptó desde pool o asignación ADM).
+  /// Requiere `aceptado == true` (no basta `uidTaxista` ni estado «asignado»).
   static bool viajeTurismoChoferConfirmado(Map<String, dynamic> vData) {
     if ((vData['tipoServicio'] ?? '').toString() != 'turismo') return false;
     final String uidTx =
         (vData['uidTaxista'] ?? vData['taxistaId'] ?? '').toString().trim();
     if (uidTx.isEmpty) return false;
-    if (vData['aceptado'] == true) return true;
+    if (vData['aceptado'] != true) return false;
     final String st =
         EstadosViaje.normalizar((vData['estado'] ?? '').toString());
-    return EstadosViaje.activos.contains(st);
+    if (vData['completado'] == true || EstadosViaje.esTerminal(st)) {
+      return false;
+    }
+    return true;
   }
 
   /// Cliente aún espera chofer (sin confirmación real del conductor).
@@ -765,6 +761,18 @@ class AsignacionTurismoRepo {
 
     final uSnap = await _db.collection('usuarios').doc(uidChofer).get();
     final Map<String, dynamic> uData = uSnap.data() ?? <String, dynamic>{};
+    final bSnap =
+        await _db.collection('billeteras_taxista').doc(uidChofer).get();
+    // Bloqueo solo si ya debe comisión pendiente o sin saldo operativo (no exigir comisión completa antes).
+    if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+      uSnap.data(),
+      bSnap.data(),
+    )) {
+      return ResultadoPrepClaimPoolTurismo.error(
+        MotivoRechazoPrepPoolTurismo.noAprobado,
+        mensajeDetalle: PagosTaxistaRepo.mensajeRecargaBannerLista,
+      );
+    }
     final String nombreDoc = (uData['nombre'] ?? '').toString().trim();
     final User? authUser = FirebaseAuth.instance.currentUser;
     final String nombre = nombreDoc.isNotEmpty
@@ -856,10 +864,8 @@ class AsignacionTurismoRepo {
       return callable.liberadoPool;
     }
 
-    return liberarViajeAlPoolTurismoSiAplica(
-      viajeId: viajeId,
-      omitirVentanaPublicacion: omitirVentanaPublicacion,
-    );
+    // Sin fallback en cliente: Firestore rules no permiten cambiar canalAsignacion.
+    return false;
   }
 
   /// Compatibilidad: reintentos del cliente solo liberan al pool (sin auto-asignar).

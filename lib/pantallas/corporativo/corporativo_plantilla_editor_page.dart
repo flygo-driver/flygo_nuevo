@@ -649,6 +649,12 @@ class _CorporativoPlantillaEditorPageState
         orden: _pasajeros.fold<int>(
               0, (m, p) => p.orden > m ? p.orden : m) +
             1,
+        biasLat: MultiparadaRutaHelper.coordsValidas(_origenLat, _origenLon)
+            ? _origenLat
+            : null,
+        biasLon: MultiparadaRutaHelper.coordsValidas(_origenLat, _origenLon)
+            ? _origenLon
+            : null,
       ),
     );
     if (result == null) return;
@@ -669,6 +675,12 @@ class _CorporativoPlantillaEditorPageState
         titulo: 'Editar pasajero',
         inicial: actual,
         orden: actual.orden > 0 ? actual.orden : index + 1,
+        biasLat: MultiparadaRutaHelper.coordsValidas(_origenLat, _origenLon)
+            ? _origenLat
+            : null,
+        biasLon: MultiparadaRutaHelper.coordsValidas(_origenLat, _origenLon)
+            ? _origenLon
+            : null,
       ),
     );
     if (result == null || !mounted) return;
@@ -1073,6 +1085,8 @@ class _CorporativoPlantillaEditorPageState
                     hint: 'Calle, avenida, sector… (como Google Maps)',
                     country: 'DO',
                     minChars: 2,
+                    modoPantallaMapa: true,
+                    esCampoOrigen: true,
                     asistenteDireccionHabilitado: true,
                     initialText:
                         _origenCtrl.text.isEmpty ? null : _origenCtrl.text,
@@ -1827,11 +1841,15 @@ class _PasajeroFormSheet extends StatefulWidget {
     required this.titulo,
     required this.orden,
     this.inicial,
+    this.biasLat,
+    this.biasLon,
   });
 
   final String titulo;
   final int orden;
   final CorporativoPasajero? inicial;
+  final double? biasLat;
+  final double? biasLon;
 
   @override
   State<_PasajeroFormSheet> createState() => _PasajeroFormSheetState();
@@ -1959,9 +1977,13 @@ class _PasajeroFormSheetState extends State<_PasajeroFormSheet> {
                 const SizedBox(height: 8),
                 CampoLugarAutocomplete(
                   label: 'Destino (donde se deja)',
-                  hint: 'Busca el destino y toca una opción',
+                  hint: 'Busca en mapa, escribe o usa RAI',
                   country: 'DO',
+                  modoPantallaMapa: true,
                   asistenteDireccionHabilitado: true,
+                  biasLat: widget.biasLat,
+                  biasLon: widget.biasLon,
+                  esCampoOrigen: false,
                   initialText: _destino.text.isEmpty ? null : _destino.text,
                   onTextChanged: (v) => _destino.text = v,
                   onPlaceSelected: (det) {

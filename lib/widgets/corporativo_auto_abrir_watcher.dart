@@ -175,7 +175,6 @@ class _CorporativoAutoAbrirWatcherState extends State<CorporativoAutoAbrirWatche
         _ultimoViajePromovido = id;
         _ultimaPromocion = ahora;
         ActiveTripService.cancelarMantenimientoOverlayViaje();
-        ActiveTripService.cancelarBloqueoShellTaxista();
         await ViajesRepo.limpiarViajeActivoSiNoOperativo(uid);
         await RaiLocalReadCache.clearActiveTripId(uid);
         ActiveTripService.notificarRebuildShell();
@@ -202,7 +201,6 @@ class _CorporativoAutoAbrirWatcherState extends State<CorporativoAutoAbrirWatche
       _ultimoViajePromovido = id;
       _ultimaPromocion = ahora;
       ActiveTripService.cancelarMantenimientoOverlayViaje();
-      ActiveTripService.cancelarBloqueoShellTaxista();
       await ViajesRepo.limpiarViajeActivoSiNoOperativo(uid);
       await RaiLocalReadCache.clearActiveTripId(uid);
       ActiveTripService.notificarRebuildShell();

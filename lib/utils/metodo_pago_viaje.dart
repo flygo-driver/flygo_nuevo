@@ -42,6 +42,15 @@ class MetodoPagoViaje {
     return 'Tarjeta';
   }
 
+  /// Cliente paga a cuenta RAI (tarjeta / transfer conciliada): liquidación semanal.
+  static bool viajeRecaudoEnCuentaRai(Map<String, dynamic> viajeData) {
+    final String ref =
+        (viajeData['referenciaRecaudo'] ?? '').toString().trim();
+    final String dest =
+        (viajeData['recaudoDestino'] ?? '').toString().trim().toLowerCase();
+    return ref.isNotEmpty || dest == 'rai';
+  }
+
   /// AZUL capturó el cobro (solo servidor / webhook escribe estos campos).
   static bool tarjetaPagadoVerificado(Map<String, dynamic> data) {
     final ep =
@@ -86,6 +95,10 @@ class MetodoPagoViaje {
   /// Cliente debe pagar o regularizar antes de seguir (bloqueo estricto en factura).
   static bool cobroClienteBloqueaApp(Map<String, dynamic> data) {
     if (tarjetaPagadoVerificado(data)) return false;
+    if (impagoRegistrado(data)) return false;
+    // Efectivo (incl. cambio desde tarjeta): cobro en mano; no bloquear por flags
+    // de tarjeta pendiente que el servidor pudo dejar al cerrar el viaje.
+    if (esEfectivo(data['metodoPago']?.toString())) return false;
     final estado =
         (data['cobroClienteEstado'] ?? '').toString().trim().toLowerCase();
     if (estado == 'pagado' || estado == 'regularizado') return false;

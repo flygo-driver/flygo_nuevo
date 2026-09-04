@@ -5,6 +5,7 @@ import {
   comisionBolaPuebloLedgerRef,
   negocioAliadoViajeGratisLedgerRef,
   debitarComisionBolaPuebloEnTx,
+  debitarComisionViajePrepagoEnTx,
 } from "./taxista_prepago_ledger.js";
 import type { DocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
@@ -31,13 +32,14 @@ import {
   statsDocRef,
 } from "./comision_incentivos_taxista.js";
 import { assertMultiparadaCompletaParaFinalizar, esCorporativoModoInformativo } from "./multiparada.js";
+import { precioSoloIdaCents } from "./viaje_ida_vuelta.js";
 import {
   elegibleLiquidacionSemanalCache,
   esElegibleLiquidacionSemanal,
   metodoPagoNormalizado,
   metodoPagoNormalizadoDesde,
 } from "./liquidacion_semanal_viaje.js";
-import { assertTaxistaAptoParaClaimPool } from "./taxista_operacion_gate.js";
+import { assertTaxistaAptoParaClaimPool, taxistaAprobadoParaOperarPool } from "./taxista_operacion_gate.js";
 import { evaluarVehiculoTurismoEnChofer } from "./turismo_asignacion_logic.js";
 import {
   PREPAGO_INSUFICIENTE_COMISION_VIAJE,
@@ -271,7 +273,9 @@ export async function getComisionPrepagoConfig(): Promise<{
     const data = (snap.data() ?? {}) as AnyMap;
     const minimoOperativoRd = numOr(data.minimoOperativoRd, MIN_SALDO_PREPAGO_COMISION_RD);
     const umbralPreventivoRd = numOr(data.umbralPreventivoRd, UMBRAL_AVISO_PREVENTIVO_PREPAGO_RD);
-    const permitirViajeConPrepagoParcial = data.permitirViajeConPrepagoParcial !== false;
+    // Prepago estricto por defecto: solo ADM puede abrir el modo parcial poniendo
+    // explícitamente `permitirViajeConPrepagoParcial: true`.
+    const permitirViajeConPrepagoParcial = data.permitirViajeConPrepagoParcial === true;
     _cfgCache = {
       loadedAt: now,
       minimoOperativoRd,
@@ -281,10 +285,11 @@ export async function getComisionPrepagoConfig(): Promise<{
     return { minimoOperativoRd, umbralPreventivoRd, permitirViajeConPrepagoParcial };
   } catch (e) {
     console.error("[getComisionPrepagoConfig]", e);
+    // Ante fallo de lectura el valor seguro es el estricto (no regalar comisión).
     return {
       minimoOperativoRd: MIN_SALDO_PREPAGO_COMISION_RD,
       umbralPreventivoRd: UMBRAL_AVISO_PREVENTIVO_PREPAGO_RD,
-      permitirViajeConPrepagoParcial: true,
+      permitirViajeConPrepagoParcial: false,
     };
   }
 }
@@ -738,17 +743,27 @@ async function taxistaBloqueoPrepagoDesalineado(uidTaxista: string): Promise<boo
 
 async function getRole(uid: string): Promise<string> {
   const snap = await db().collection("usuarios").doc(uid).get();
-  let rolUsuario = roleFromUserDoc(snap.data() as AnyMap | undefined).trim().toLowerCase();
+  const uData = (snap.data() ?? {}) as AnyMap;
+  let rolUsuario = roleFromUserDoc(uData).trim().toLowerCase();
   if (rolUsuario === "administrador") rolUsuario = "admin";
   // Misma convención que Firestore rules / app: chofer legacy "driver" = taxista.
   if (rolUsuario === "driver") rolUsuario = "taxista";
-  if (rolUsuario) return rolUsuario;
 
   const rolSnap = await db().collection("roles").doc(uid).get();
-  let rolRaw = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
-  if (rolRaw === "administrador") rolRaw = "admin";
-  if (rolRaw === "driver") rolRaw = "taxista";
-  return rolRaw;
+  let rolRoles = String((rolSnap.data() as AnyMap | undefined)?.rol ?? "").trim().toLowerCase();
+  if (rolRoles === "administrador") rolRoles = "admin";
+  if (rolRoles === "driver") rolRoles = "taxista";
+
+  // App unificada: usuarios.rol puede ser "cliente" pero opera como chofer aprobado.
+  if (uData.registroTaxistaCompleto === true) {
+    if (rolRoles === "taxista" || rolUsuario === "taxista") return "taxista";
+    if (taxistaAprobadoParaOperarPool(uData) || uData.puedeRecibirViajes === true) {
+      return "taxista";
+    }
+  }
+
+  if (rolUsuario) return rolUsuario;
+  return rolRoles;
 }
 
 /** Alineado con EstadosViaje.normalizar (Flutter): alias legacy y espacios. */
@@ -775,7 +790,18 @@ function normalizeEstadoViajeDoc(raw: unknown): string {
     return "en_camino_pickup";
   }
   if (s === "finalizado" || s === "completado") return "completado";
-  if (s === "cancelado" || s === "cancelled") return "cancelado";
+  if (
+    s === "cancelado" ||
+    s === "cancelled" ||
+    s === "cancelado_cliente" ||
+    s === "cancelado_por_tiempo" ||
+    s === "cancelado_gira" ||
+    s === "cancelado_admin" ||
+    s === "cancelado_por_admin" ||
+    s.startsWith("cancelado")
+  ) {
+    return "cancelado";
+  }
   return s;
 }
 
@@ -905,6 +931,121 @@ async function syncBolaPuebloTrasViajeEspejoFinalizado(
     viajeId,
     bolaId,
   });
+}
+
+/**
+ * Viajes cerrados bajo reglas viejas (p. ej. transferencia sin ledger prepago):
+ * aplica comisión idempotente y actualiza snapshot de factura.
+ */
+export async function sanarPrepagoComisionViajeCerradoSiFalta(
+  viajeId: string,
+  viajeData: AnyMap,
+): Promise<{ healed: boolean; saldoPrepagoDespues?: number }> {
+  const vid = viajeId.trim();
+  const uidTaxista = String(viajeData.uidTaxista ?? viajeData.taxistaId ?? "").trim();
+  if (!vid || !uidTaxista) return { healed: false };
+  if (!viajeAplicaComisionPrepago(viajeData)) return { healed: false };
+  if (viajeData.pagoRegistrado !== true) return { healed: false };
+  if (viajeData.negocioAliadoPromoGratis === true) return { healed: false };
+
+  const comisionCentsDb =
+    typeof viajeData.comision_cents === "number" ? Math.trunc(viajeData.comision_cents) : null;
+  let comisionRd = 0;
+  if (comisionCentsDb !== null && comisionCentsDb >= 0) {
+    comisionRd = fromCents(comisionCentsDb);
+  } else {
+    const raw = viajeData.comision ?? viajeData.comisionFlygo ?? 0;
+    comisionRd = typeof raw === "number" && Number.isFinite(raw) ? raw : Number(raw);
+  }
+  if (!Number.isFinite(comisionRd) || comisionRd <= 1e-6) return { healed: false };
+
+  const ledgerRef = comisionViajeEfectivoLedgerRef(uidTaxista, vid);
+  const preSnap = await ledgerRef.get();
+  if (preSnap.exists) return { healed: false };
+
+  let healed = false;
+  let saldoDespues: number | undefined;
+  await db().runTransaction(async (tx) => {
+    const movSnap = await tx.get(ledgerRef);
+    if (movSnap.exists) return;
+
+    const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
+    const billeSnap = await tx.get(billeRef);
+    const billeData = (billeSnap.data() ?? {}) as Record<string, unknown>;
+    const eximePrimerGratis = negocioAliadoEximePrimerEfectivoGratis(viajeData);
+
+    const deb = await debitarComisionViajePrepagoEnTx(tx, {
+      uidTaxista,
+      viajeId: vid,
+      comisionRd,
+      fuente: "heal_prepago_viaje_cerrado_cf",
+      billeData,
+      eximePrimerGratis,
+      existingMovSnap: movSnap,
+    });
+    if (!deb.appliedNow && !deb.alreadyHadLedger) return;
+
+    healed = true;
+    saldoDespues = deb.saldoPrepagoDespues;
+    tx.set(
+      db().collection("viajes").doc(vid),
+      {
+        facturaSaldoPrepagoComisionRd: deb.saldoPrepagoDespues,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    tx.set(
+      billeRef,
+      {
+        ultimoViajeId: vid,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  if (healed) {
+    logger.info("[PREPAGO_HEAL] comisión prepago aplicada a viaje ya cerrado", {
+      viajeId: vid,
+      uidTaxista,
+      saldoPrepagoDespues: saldoDespues,
+    });
+  }
+  return { healed, saldoPrepagoDespues: saldoDespues };
+}
+
+/** Repara ledgers prepago faltantes en viajes completados del taxista (reglas viejas). */
+export async function sanearPrepagoViajesTaxistaCompletados(
+  uidTaxista: string,
+  opts?: { limit?: number },
+): Promise<{ viajesRevisados: number; viajesSanados: number }> {
+  const uid = uidTaxista.trim();
+  if (!uid) return { viajesRevisados: 0, viajesSanados: 0 };
+  const limit = Math.min(Math.max(opts?.limit ?? 30, 1), 100);
+  const snap = await db()
+    .collection("viajes")
+    .where("uidTaxista", "==", uid)
+    .where("completado", "==", true)
+    .orderBy("finalizadoEn", "desc")
+    .limit(limit)
+    .get()
+    .catch(async () => {
+      const fallback = await db()
+        .collection("viajes")
+        .where("uidTaxista", "==", uid)
+        .where("completado", "==", true)
+        .limit(limit)
+        .get();
+      return fallback;
+    });
+
+  let viajesSanados = 0;
+  for (const doc of snap.docs) {
+    const r = await sanarPrepagoComisionViajeCerradoSiFalta(doc.id, (doc.data() ?? {}) as AnyMap);
+    if (r.healed) viajesSanados += 1;
+  }
+  return { viajesRevisados: snap.size, viajesSanados };
 }
 
 async function ensureIdempotencyStart(
@@ -1080,9 +1221,34 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     const aplicaPrepagoComision = viajeAplicaComisionPrepago(d);
     const esPromoGratisQr = d.negocioAliadoPromoGratis === true;
 
-    const precioCents = (precioCentsDb !== null && precioCentsDb > 0)
+    const precioCentsAcordado = (precioCentsDb !== null && precioCentsDb > 0)
       ? precioCentsDb
       : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
+
+    // Ida y vuelta cerrado sin haber hecho el regreso (típicamente un chofer con
+    // app vieja que no vio el botón): se devuelve el recargo ×1.8 y se cobra la
+    // ida sola. Sin esto el cliente pagaría un regreso que nunca ocurrió.
+    const regresoQuedoPendiente =
+      d.idaYVuelta === true && d.regresoPendiente === true;
+    const precioSoloIdaPorRegresoOmitido = regresoQuedoPendiente
+      ? precioSoloIdaCents({
+          precioActualCents: precioCentsAcordado,
+          precioSoloIdaGuardadoCents: d.precioSoloIdaCents,
+        })
+      : null;
+    const regresoOmitidoPatch: AnyMap = regresoQuedoPendiente
+      ? {
+          regresoPendiente: false,
+          regresoEnCurso: false,
+          regresoNoRealizado: true,
+          regresoCanceladoEn: FieldValue.serverTimestamp(),
+          ...(precioSoloIdaPorRegresoOmitido != null
+            ? { precioAntesRegresoCanceladoCents: precioCentsAcordado }
+            : {}),
+        }
+      : {};
+    const precioCents =
+      precioSoloIdaPorRegresoOmitido ?? precioCentsAcordado;
 
     const billeRef = db().collection("billeteras_taxista").doc(uidTaxista);
     const asientoRef = db().collection("pagos").doc(`viaje_${viajeId}_asiento`);
@@ -1420,9 +1586,9 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         viajeId,
         viajeData: d,
         clienteSnap: clienteSnapPre,
-        gananciaCents,
-        precioCents,
-        billeData: billeDataCred,
+          gananciaCents,
+          precioCents,
+          billeData: billeDataCred,
         fuente: "finalizar_viaje_seguro_cf",
         existingLedgerSnap: negocioGratisLedgerSnapPre ?? undefined,
       });
@@ -1443,6 +1609,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       ...incentivoViajePatch,
       ...negocioAliadoPatch,
       ...prepagoGratisPatch,
+      ...regresoOmitidoPatch,
       precio: fromCents(precioCents),
       comision: fromCents(comisionCents),
       gananciaTaxista: fromCents(gananciaCents),
@@ -1508,6 +1675,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
       const vd = (vHeal.data() ?? {}) as AnyMap;
       if (vHeal.exists && (vd.completado === true || normalizeEstadoViajeDoc(vd.estado) === "completado")) {
         await syncBolaPuebloTrasViajeEspejoFinalizado(viajeId, vd);
+        await sanarPrepagoComisionViajeCerradoSiFalta(viajeId, vd);
       }
     } catch (healErr: unknown) {
       logger.warn("[BOLA_AHORRO] sync bola heal post-alreadyCompleted falló", { viajeId, healErr });
@@ -1515,7 +1683,7 @@ export const finalizarViajeSeguro = onCall(async (request) => {
   }
 
   const uidT = String((result as AnyMap).uidTaxista ?? "").trim();
-  if (uidT && (result as AnyMap).alreadyCompleted !== true) {
+  if (uidT) {
     try {
       await syncTaxistaBloqueoOperativo(uidT);
     } catch (syncErr: unknown) {
@@ -1525,6 +1693,8 @@ export const finalizarViajeSeguro = onCall(async (request) => {
         syncErr,
       });
     }
+  }
+  if (uidT && (result as AnyMap).alreadyCompleted !== true) {
     try {
       const vPost = await viajeRef.get();
       const vdPost = (vPost.data() ?? {}) as AnyMap;
@@ -2179,6 +2349,21 @@ export const aceptarViajeSeguro = onCall(async (request) => {
     else if (tipoServicio === "turismo") tipoVehiculoFormateado = "🏝️ TURISMO 🏝️";
     else if (tipoServicio === "normal") tipoVehiculoFormateado = "🚗 NORMAL";
 
+    const perfilBancoSnap = snapshotPerfilTaxistaParaFactura(uData);
+
+    const pinExistente = String(d.codigoVerificacion ?? "")
+      .replace(/\D/g, "")
+      .trim();
+    const pinPatch =
+      pinExistente.length === 6
+        ? {}
+        : {
+            codigoVerificacion: String(
+              100000 + Math.floor(Math.random() * 900000),
+            ),
+            codigoVerificado: false,
+          };
+
     tx.update(viajeRef, {
       uidTaxista: uidActor,
       taxistaId: uidActor,
@@ -2194,6 +2379,11 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       lonTaxista: 0.0,
       driverLat: 0.0,
       driverLon: 0.0,
+      bancoTaxista: perfilBancoSnap.bancoTaxista,
+      numeroCuentaTaxista: perfilBancoSnap.numeroCuentaTaxista,
+      tipoCuentaTaxista: perfilBancoSnap.tipoCuentaTaxista,
+      titularCuentaTaxista: perfilBancoSnap.titularCuentaTaxista,
+      ciTaxista: perfilBancoSnap.ciTaxista,
       estado: "aceptado",
       aceptado: true,
       rechazado: false,
@@ -2204,6 +2394,7 @@ export const aceptarViajeSeguro = onCall(async (request) => {
       reservadoPor: "",
       reservadoHasta: null,
       ignoradosPor: FieldValue.delete(),
+      ...pinPatch,
     });
 
     tx.set(userRef, {
@@ -2482,8 +2673,11 @@ export const cancelarViajeClienteSeguro = onCall(async (request) => {
     }
 
     const estadoNorm = normalizeEstadoViajeDoc(d.estado);
-    if (estadoNorm === "completado" || estadoNorm === "cancelado") {
-      throw new HttpsError("failed-precondition", "El viaje ya está cerrado");
+    if (estadoNorm === "completado") {
+      throw new HttpsError("failed-precondition", "El viaje ya finalizó");
+    }
+    if (estadoNorm === "cancelado") {
+      return { ok: true, viajeId, alreadyCancelled: true };
     }
     if (estadoNorm === "a_bordo" || estadoNorm === "en_curso") {
       throw new HttpsError(

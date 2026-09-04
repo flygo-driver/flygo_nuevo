@@ -6,13 +6,32 @@ import {
   prepagoInsuficienteParaViajeEfectivo,
   viajeAplicaComisionPrepago,
   viajeEsEfectivoParaComisionPrepago,
+  viajeRecaudoEnCuentaRai,
 } from "../lib/prepago_comision_viaje.js";
 
-test("viajeAplicaComisionPrepago — solo efectivo (digital → liquidación semanal)", () => {
+test("viajeAplicaComisionPrepago — efectivo y transferencia P2P al conductor", () => {
   assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Efectivo" }), true);
-  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Transferencia" }), false);
+  assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Transferencia" }), true);
   assert.equal(viajeAplicaComisionPrepago({ metodoPago: "Tarjeta" }), false);
   assert.equal(viajeAplicaComisionPrepago({ metodoPago: "" }), true);
+});
+
+test("viajeAplicaComisionPrepago — tarjeta / recaudo RAI → liquidación semanal", () => {
+  assert.equal(
+    viajeAplicaComisionPrepago({
+      metodoPago: "Transferencia",
+      recaudoDestino: "rai",
+    }),
+    false,
+  );
+  assert.equal(
+    viajeAplicaComisionPrepago({
+      metodoPago: "Transferencia",
+      referenciaRecaudo: "REF-123",
+    }),
+    false,
+  );
+  assert.equal(viajeRecaudoEnCuentaRai({ recaudoDestino: "rai" }), true);
 });
 
 test("viajeAplicaComisionPrepago — exclusiones", () => {
@@ -27,8 +46,8 @@ test("viajeAplicaComisionPrepago — exclusiones", () => {
   );
 });
 
-test("viajeEsEfectivoParaComisionPrepago — solo efectivo", () => {
-  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), false);
+test("viajeEsEfectivoParaComisionPrepago — alias efectivo + transferencia", () => {
+  assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Transferencia" }), true);
   assert.equal(viajeEsEfectivoParaComisionPrepago({ metodoPago: "Efectivo" }), true);
 });
 
@@ -68,6 +87,23 @@ test("prepago parcial permitido: no bloquea aunque comisión > saldo", () => {
   );
 });
 
+test("turismo: aceptar sin prepago completo (cobro al finalizar viaje)", () => {
+  const viaje = { tipoServicio: "turismo", metodoPago: "Efectivo", precio: 2000 };
+  const bille = {
+    primerViajeComisionGratisConsumido: true,
+    saldoPrepagoComisionRd: 20,
+    comisionPendiente: 0,
+  };
+  assert.equal(
+    prepagoInsuficienteParaViajeEfectivo({
+      billeData: bille,
+      viajeData: viaje,
+      globalComisionPct: 18,
+    }),
+    false,
+  );
+});
+
 test("primer viaje gratis: no exige prepago por comisión", () => {
   const viaje = { metodoPago: "Efectivo", precio: 2000 };
   const bille = { saldoPrepagoComisionRd: 0, comisionPendiente: 0 };
@@ -81,14 +117,14 @@ test("primer viaje gratis: no exige prepago por comisión", () => {
   );
 });
 
-test("transferencia: no exige prepago (liquidación semanal)", () => {
+test("transferencia P2P: exige prepago igual que efectivo", () => {
   assert.equal(
     prepagoInsuficienteParaViajeEfectivo({
       billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
       viajeData: { metodoPago: "Transferencia", precio: 2000 },
       globalComisionPct: 18,
     }),
-    false,
+    true,
   );
 });
 
@@ -97,6 +133,21 @@ test("tarjeta: no exige prepago (liquidación semanal)", () => {
     prepagoInsuficienteParaViajeEfectivo({
       billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
       viajeData: { metodoPago: "Tarjeta", precio: 2000 },
+      globalComisionPct: 18,
+    }),
+    false,
+  );
+});
+
+test("transferencia a cuenta RAI: no exige prepago", () => {
+  assert.equal(
+    prepagoInsuficienteParaViajeEfectivo({
+      billeData: { saldoPrepagoComisionRd: 0, primerViajeComisionGratisConsumido: true },
+      viajeData: {
+        metodoPago: "Transferencia",
+        precio: 2000,
+        recaudoDestino: "rai",
+      },
       globalComisionPct: 18,
     }),
     false,

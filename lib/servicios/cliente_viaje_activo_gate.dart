@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
-/// Evita que el cliente pida otro viaje / entre a Bola mientras tiene uno pausado.
+/// Evita que el cliente pida otro viaje mientras tiene uno pausado.
 class ClienteViajeActivoGate {
   ClienteViajeActivoGate._();
 

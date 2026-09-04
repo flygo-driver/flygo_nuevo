@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/post_viaje_cliente_flow.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_viaje.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 
@@ -8,12 +9,20 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 class PostViajeClienteNav {
   PostViajeClienteNav._();
 
+  /// Viajes con el cierre ya abierto. El listener y la pantalla del viaje pueden
+  /// disparar a la vez y sus chequeos de supresión son `async`: sin este candado
+  /// síncrono se apilaban dos facturas y la de abajo quedaba sin salida.
+  static final Set<String> _cierreEnCurso = <String>{};
+
   /// Comprobante formal [FacturaViaje] y luego recibo + calificación.
   static Future<void> abrirFacturaYFlujo({
     BuildContext? context,
     required String viajeId,
     Map<String, dynamic>? viajeDataSemilla,
   }) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+
     final NavigatorState? nav = _navigator(context);
     if (nav == null || !nav.mounted) return;
 
@@ -24,25 +33,34 @@ class PostViajeClienteNav {
       return;
     }
 
-    if (!nav.mounted) return;
+    if (!_cierreEnCurso.add(id)) return;
+    try {
+      // Mismo criterio que taxista: quitar overlay ANTES de factura/post-viaje.
+      ActiveTripService.prepararSalidaClientePostViaje(viajeId: viajeId);
 
-    await FacturaViaje.mostrar(
-      nav.context,
-      viajeId: viajeId,
-      role: 'cliente',
-      autoCerrarAlContinuar: true,
-    );
-    if (!nav.mounted) return;
+      if (!nav.mounted) return;
 
-    await nav.push<void>(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => PostViajeClienteFlow(
-          viajeId: viajeId,
-          viajeDataSemilla: viajeDataSemilla,
+      await FacturaViaje.mostrar(
+        nav.context,
+        viajeId: viajeId,
+        role: 'cliente',
+        autoCerrarAlContinuar: true,
+        viajeDataSemilla: viajeDataSemilla,
+      );
+      if (!nav.mounted) return;
+
+      await nav.push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => PostViajeClienteFlow(
+            viajeId: viajeId,
+            viajeDataSemilla: viajeDataSemilla,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _cierreEnCurso.remove(id);
+    }
   }
 
   static NavigatorState? _navigator(BuildContext? context) {

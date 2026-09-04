@@ -207,6 +207,8 @@ String taxistaMensajeClaimFallido(
           'Si ya tienes documentos aprobados, contacta administración.';
     case 'callable-no-disponible':
       return 'No se pudo aceptar (servidor). Actualiza la app o intenta en unos segundos.';
+    case 'sesion-expirada':
+      return 'Tu sesión expiró. Cierra sesión, vuelve a entrar como conductor e intenta de nuevo.';
     default:
       if (res.startsWith('Este viaje pidió') ||
           res.startsWith('Este viaje requiere')) {

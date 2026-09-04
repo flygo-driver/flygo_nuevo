@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -74,13 +72,7 @@ class QuickTripCard extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: () {
-                      unawaited(
-                        NavigationService.clearAndGoViajeEnCursoCliente(
-                          preNav: Navigator.of(context, rootNavigator: true),
-                        ),
-                      );
-                    },
+                    onPressed: NavigationService.retomarViajeActivoCliente,
                     icon: const Icon(
                       Icons.directions_car,
                       color: Colors.greenAccent,

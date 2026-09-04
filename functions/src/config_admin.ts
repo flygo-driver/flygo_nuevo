@@ -154,9 +154,17 @@ export const updateComisionPrepagoConfig = onCall(async (request) => {
   const ref = db().collection("config").doc("comision_prepago");
   const beforeSnap = await ref.get();
   const before = safeJson(beforeSnap.data() ?? {});
+  // Modo parcial (deuda al finalizar) solo si ADM lo pide explícitamente; si no
+  // se envía el campo, se conserva el valor actual sin abrir el prepago.
+  const parcialRaw = request.data?.permitirViajeConPrepagoParcial;
+  const permitirViajeConPrepagoParcial =
+    parcialRaw === undefined || parcialRaw === null
+      ? beforeSnap.data()?.permitirViajeConPrepagoParcial === true
+      : parcialRaw === true;
   const patch = {
     minimoOperativoRd,
     umbralPreventivoRd,
+    permitirViajeConPrepagoParcial,
     updatedAt: FieldValue.serverTimestamp(),
   };
   await ref.set(patch, { merge: true });
@@ -176,7 +184,11 @@ export const updateComisionPrepagoConfig = onCall(async (request) => {
     actorUid: uid,
     resourceType: "config",
     resourceId: "config/comision_prepago",
-    metadata: { minimoOperativoRd, umbralPreventivoRd },
+    metadata: {
+      minimoOperativoRd,
+      umbralPreventivoRd,
+      permitirViajeConPrepagoParcial,
+    },
   });
 
   invalidateComisionPrepagoConfigCache();

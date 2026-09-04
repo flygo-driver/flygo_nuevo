@@ -14,6 +14,7 @@ import 'package:flygo_nuevo/widgets/cliente_negocio_aliado_promo_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_promo_resumen_panel.dart';
 import 'package:flygo_nuevo/widgets/cuenta_settings_tiles.dart';
 import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
+import 'package:flygo_nuevo/servicios/rai_ubicacion_cliente_service.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_config_panel.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_rol.dart';
 import 'package:flygo_nuevo/widgets/shell_tab_nav.dart';
@@ -141,16 +142,27 @@ class ClienteCuentaTab extends StatelessWidget {
             _ClienteCuentaSection(
               title: 'Tu cuenta',
               children: [
-                _ClienteCuentaMenuRow(
-                  icon: Icons.location_on_rounded,
-                  iconBg: const Color(0xFF16A34A).withValues(alpha: 0.14),
-                  iconFg: const Color(0xFF16A34A),
-                  title: 'Ubicación',
-                  subtitle: 'Permisos GPS y ajustes del teléfono',
-                  onTap: () => _openPage(
-                    context,
-                    const RaiUbicacionAjustesPage(rol: RaiUbicacionRol.cliente),
-                  ),
+                ValueListenableBuilder<RaiUbicacionClienteModo>(
+                  valueListenable: RaiUbicacionClienteService.instance.modo,
+                  builder: (context, modo, _) {
+                    final svc = RaiUbicacionClienteService.instance;
+                    final listo = modo == RaiUbicacionClienteModo.listo;
+                    return _ClienteCuentaMenuRow(
+                      icon: Icons.location_on_rounded,
+                      iconBg: const Color(0xFF16A34A).withValues(alpha: 0.14),
+                      iconFg: listo
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFFDC2626),
+                      title: 'Ubicación',
+                      subtitle: svc.subtituloCuentaMenu,
+                      onTap: () => _openPage(
+                        context,
+                        const RaiUbicacionAjustesPage(
+                          rol: RaiUbicacionRol.cliente,
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 _ClienteCuentaMenuRow(
                   icon: Icons.person_rounded,

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,8 +16,11 @@ import 'package:flygo_nuevo/pantallas/cliente/viaje_solicitado.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
 import 'package:flygo_nuevo/servicios/rai_local_read_cache.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/bola_cancelacion_listener.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_listener.dart';
+import 'package:flygo_nuevo/utils/bola_ahorro_pool_isolation.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 import 'package:flygo_nuevo/widgets/cliente_fidelidad_milestone_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_post_viaje_listener.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_activo_retomar_banner.dart';
@@ -70,17 +74,17 @@ class ClienteShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const ClienteRegistroGate(
-      child: BolaCancelacionListener(
-        child: BolaPostFacturaListener(
-          child: ClientePostViajeListener(
-            child: ClienteFidelidadMilestoneListener(
-              child: _ClienteShellScaffold(),
-            ),
-          ),
-        ),
+    Widget core = const ClientePostViajeListener(
+      child: ClienteFidelidadMilestoneListener(
+        child: _ClienteShellScaffold(),
       ),
     );
+    if (!BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) {
+      core = BolaCancelacionListener(
+        child: BolaPostFacturaListener(child: core),
+      );
+    }
+    return ClienteRegistroGate(child: core);
   }
 }
 
@@ -102,11 +106,14 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   StreamSubscription<bool>? _viajeActivoSub;
   bool? _viajeActivoShell;
+  bool _bootstrapViajeResuelto = false;
+  bool _bootstrapViajeEnCurso = false;
   Timer? _bootstrapViajeTimeout;
   VoidCallback? _offlineListener;
   VoidCallback? _shellRebuildListener;
 
-  static const Duration _kBootstrapViajeMaxWait = Duration(seconds: 3);
+  static const Duration _kBootstrapViajeMaxWait = Duration(seconds: 8);
+  static const Duration _kBootstrapQueryMaxWait = Duration(seconds: 5);
   static const int _kTabExperiencias = 2;
 
   String? _lastDeepLinkPoolOpened;
@@ -242,19 +249,29 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         PoolDeepLink.notifyClienteShellReady();
       });
     } else {
+      unawaited(ActiveTripService.prepararModeloViajePegadoCliente(uid));
+      // Como taxista_shell: no bloquear la UI con spinner indefinido en cold start.
+      if (ActiveTripService.debeMantenerOverlayViajeEnShell) {
+        _viajeActivoShell = true;
+      } else {
+        _viajeActivoShell = false;
+      }
+
       _offlineListener = () => _resolverBootstrapSiOffline(uid);
       RaiConnectivityService.instance.offline.addListener(_offlineListener!);
 
+      unawaited(_resolverBootstrapConCache(uid, porTimeout: false));
+
       _bootstrapViajeTimeout = Timer(_kBootstrapViajeMaxWait, () {
-        if (!mounted || _viajeActivoShell != null) return;
+        if (!mounted || _bootstrapViajeResuelto) return;
         unawaited(_resolverBootstrapConCache(uid, porTimeout: true));
       });
 
       _shellRebuildListener = () {
         if (!mounted) return;
-        if (ActiveTripService.debeForzarInicioClienteShell) {
+        if (ActiveTripService.clientePostViajeEnHome) {
           if (_viajeActivoShell != false) {
-            print('[VIAJE_ACTIVO] cliente_shell rebuild tick → forzar inicio');
+            print('[VIAJE_ACTIVO] cliente_shell rebuild tick → post-viaje home');
             setState(() => _viajeActivoShell = false);
           }
           return;
@@ -270,10 +287,22 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
       _viajeActivoSub =
           ActiveTripService.streamTieneViajeActivo(uid).listen((bool ok) {
         if (!mounted) return;
-        _bootstrapViajeTimeout?.cancel();
-        if (ActiveTripService.debeForzarInicioClienteShell) {
+        if (ActiveTripService.clienteSuprimirOverlayViajeActivo) {
           if (_viajeActivoShell != false) {
-            print('[VIAJE_ACTIVO] cliente_shell forzar inicio → home');
+            print(
+              '[VIAJE_ACTIVO] cliente_shell solicitud/cotización → mantener home',
+            );
+            setState(() => _viajeActivoShell = false);
+          }
+          return;
+        }
+        if (ok) {
+          _bootstrapViajeTimeout?.cancel();
+          _bootstrapViajeResuelto = true;
+        }
+        if (ActiveTripService.clientePostViajeEnHome) {
+          if (_viajeActivoShell != false) {
+            print('[VIAJE_ACTIVO] cliente_shell post-viaje → home');
             setState(() {
               _viajeActivoShell = false;
               _lastDeepLinkPoolOpened = null;
@@ -286,7 +315,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         }
         if (_viajeActivoShell == true &&
             !ok &&
-            ActiveTripService.debeMantenerOverlayViajeEnShell) {
+            (ActiveTripService.debeMantenerOverlayViajeEnShell ||
+                ActiveTripService.retomarClienteEnCurso ||
+                ActiveTripService.viajeOperativoClienteConocido.isNotEmpty)) {
           return;
         }
         if (_viajeActivoShell != ok) {
@@ -313,7 +344,7 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
 
   void _resolverBootstrapSiOffline(String uid) {
     if (!RaiConnectivityService.instance.isOffline) return;
-    if (_viajeActivoShell != null) return;
+    if (_bootstrapViajeResuelto) return;
     unawaited(_resolverBootstrapConCache(uid, porTimeout: false));
   }
 
@@ -322,32 +353,252 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     String uid, {
     required bool porTimeout,
   }) async {
-    if (!mounted || _viajeActivoShell != null) return;
-    _bootstrapViajeTimeout?.cancel();
-
-    bool mostrarViaje = false;
-    if (ActiveTripService.debeForzarInicioClienteShell) {
-      mostrarViaje = false;
-    } else if (RaiConnectivityService.instance.isOffline ||
-        ActiveTripService.debeMantenerOverlayViajeEnShell) {
-      mostrarViaje = ActiveTripService.debeMantenerOverlayViajeEnShell;
-      if (!mostrarViaje) {
-        final String? cached =
-            await RaiLocalReadCache.lastKnownActiveTripId(uid);
-        mostrarViaje = (cached ?? '').trim().isNotEmpty;
-      }
+    if (!mounted || _bootstrapViajeResuelto) return;
+    if (_bootstrapViajeEnCurso && !porTimeout) return;
+    if (porTimeout && _bootstrapViajeEnCurso) {
+      print('[VIAJE_ACTIVO] cliente_shell bootstrap timeout forzado');
     }
+    _bootstrapViajeEnCurso = true;
+    try {
+      await ActiveTripService.prepararModeloViajePegadoCliente(uid);
 
-    if (!mounted || _viajeActivoShell != null) return;
-    print(
-      '[VIAJE_ACTIVO] cliente_shell bootstrap '
-      '${porTimeout ? 'timeout' : 'offline/error'} → viaje=$mostrarViaje',
-    );
-    setState(() => _viajeActivoShell = mostrarViaje);
-    if (!mostrarViaje) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        PoolDeepLink.notifyClienteShellReady();
-      });
+      if (_viajeActivoShell == true) {
+        _bootstrapViajeResuelto = true;
+        return;
+      }
+
+      bool mostrarViaje = false;
+      final bool bloquearPorPostViaje =
+          ActiveTripService.flujoPostViajeClienteActivo;
+      if (!bloquearPorPostViaje) {
+        mostrarViaje = ActiveTripService.debeMantenerOverlayViajeEnShell;
+
+        // Query primero: es la fuente fiable cuando GET directo falla (PIN / cold start).
+        DocumentSnapshot<Map<String, dynamic>>? docQuery;
+        try {
+          docQuery = await ActiveTripService.obtenerDocumentoViajeActivo(uid)
+              .timeout(_kBootstrapQueryMaxWait);
+        } on TimeoutException {
+          print('[VIAJE_ACTIVO] cliente_shell bootstrap query timeout');
+        }
+        if (docQuery != null && docQuery.exists) {
+          if (ActiveTripService.viajeClienteDescartadoEnSesion(docQuery.id) ||
+              await ViajesRepo.viajeQueryMatchEsFantasmaParaCliente(
+                docQuery.id,
+              )) {
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → viaje fantasma id=${docQuery.id}',
+            );
+            unawaited(
+              ActiveTripService.liberarClienteTrasViajeEliminado(
+                docQuery.id,
+                uid: uid,
+              ),
+            );
+          } else {
+          final Map<String, dynamic> d =
+              docQuery.data() ?? <String, dynamic>{};
+          if (ViajePoolTaxistaGate.esReservaProgramadaLejana(d)) {
+            mostrarViaje = false;
+            ActiveTripService.liberarReservaProgramadaLejanaEnHome(
+              viajeId: docQuery.id,
+            );
+            ActiveTripService.sembrarBootstrapViajeCliente(docQuery.id, d);
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → reserva programada id=${docQuery.id}',
+            );
+          } else if (ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(
+            d,
+            uid,
+          )) {
+            mostrarViaje = true;
+            ActiveTripService.registrarViajeOperativoCliente(docQuery.id);
+            ActiveTripService.cancelarForzarInicioClienteShell();
+            ActiveTripService.mantenerOverlayViajeEnShell(
+              const Duration(minutes: 5),
+            );
+            unawaited(RaiLocalReadCache.rememberActiveTripId(uid, docQuery.id));
+            ActiveTripService.sembrarBootstrapViajeCliente(docQuery.id, d);
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → viaje desde query id=${docQuery.id}',
+            );
+            unawaited(
+              ActiveTripService.repararViajeActivoClienteSiHuerfano(
+                uid,
+                viajeIdHint: docQuery.id,
+              ),
+            );
+          }
+          }
+        }
+
+        if (!mostrarViaje) {
+          try {
+            final DocumentSnapshot<Map<String, dynamic>> userSnap =
+                await FirebaseFirestore.instance
+                    .collection('usuarios')
+                    .doc(uid)
+                    .get();
+            final String activoId =
+                (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+            if (activoId.isNotEmpty) {
+              Map<String, dynamic>? dActivo;
+              try {
+                final DocumentSnapshot<Map<String, dynamic>> vSnap =
+                    await FirebaseFirestore.instance
+                        .collection('viajes')
+                        .doc(activoId)
+                        .get()
+                        .timeout(_kBootstrapQueryMaxWait);
+                if (vSnap.exists) {
+                  dActivo = vSnap.data();
+                }
+              } catch (_) {}
+              if (dActivo != null &&
+                  ViajePoolTaxistaGate.esReservaProgramadaLejana(dActivo)) {
+                mostrarViaje = false;
+                ActiveTripService.liberarReservaProgramadaLejanaEnHome(
+                  viajeId: activoId,
+                );
+                ActiveTripService.sembrarBootstrapViajeCliente(
+                  activoId,
+                  dActivo,
+                );
+                print(
+                  '[VIAJE_ACTIVO] cliente_shell bootstrap → reserva programada viajeActivoId=$activoId',
+                );
+              } else if (dActivo != null &&
+                  ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(
+                    dActivo,
+                    uid,
+                  )) {
+                mostrarViaje = true;
+                ActiveTripService.registrarViajeOperativoCliente(activoId);
+                ActiveTripService.cancelarForzarInicioClienteShell();
+                ActiveTripService.mantenerOverlayViajeEnShell(
+                  const Duration(minutes: 5),
+                );
+                print(
+                  '[VIAJE_ACTIVO] cliente_shell bootstrap → overlay viajeActivoId=$activoId',
+                );
+                unawaited(
+                  ActiveTripService.repararViajeActivoClienteSiHuerfano(
+                    uid,
+                    viajeIdHint: activoId,
+                  ),
+                );
+              } else if (dActivo == null) {
+                print(
+                  '[VIAJE_ACTIVO] cliente_shell bootstrap → sin doc activoId=$activoId (sin overlay optimista)',
+                );
+                unawaited(
+                  ActiveTripService.reconciliarViajeActivoHuerfanoCliente(uid),
+                );
+              }
+            }
+          } catch (e) {
+            print('[VIAJE_ACTIVO] cliente_shell bootstrap viajeActivoId: $e');
+          }
+        }
+
+        final String cachedId =
+            (await RaiLocalReadCache.lastKnownActiveTripId(uid) ?? '').trim();
+
+        if (!mostrarViaje && cachedId.isNotEmpty) {
+          Map<String, dynamic>? dCache;
+          try {
+            final DocumentSnapshot<Map<String, dynamic>> vSnap =
+                await FirebaseFirestore.instance
+                    .collection('viajes')
+                    .doc(cachedId)
+                    .get()
+                    .timeout(_kBootstrapQueryMaxWait);
+            if (vSnap.exists) dCache = vSnap.data();
+          } catch (_) {}
+          if (dCache != null &&
+              ViajePoolTaxistaGate.esReservaProgramadaLejana(dCache)) {
+            ActiveTripService.liberarReservaProgramadaLejanaEnHome(
+              viajeId: cachedId,
+            );
+            ActiveTripService.sembrarBootstrapViajeCliente(cachedId, dCache);
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → reserva programada caché=$cachedId',
+            );
+          } else if (dCache != null &&
+              ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(
+                dCache,
+                uid,
+              )) {
+            mostrarViaje = true;
+            ActiveTripService.registrarViajeOperativoCliente(cachedId);
+            ActiveTripService.cancelarForzarInicioClienteShell();
+            ActiveTripService.mantenerOverlayViajeEnShell(
+              const Duration(minutes: 5),
+            );
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → overlay caché=$cachedId',
+            );
+            unawaited(
+              ActiveTripService.repararViajeActivoClienteSiHuerfano(
+                uid,
+                viajeIdHint: cachedId,
+              ),
+            );
+          }
+        } else if (!mostrarViaje &&
+            docQuery != null &&
+            docQuery.exists &&
+            !ViajePoolTaxistaGate.esReservaProgramadaLejana(
+              docQuery.data() ?? <String, dynamic>{},
+            ) &&
+            ActiveTripService.viajeDocCuentaComoSeguimientoParaUsuario(
+              docQuery.data() ?? <String, dynamic>{},
+              uid,
+            )) {
+          ActiveTripService.sembrarViajeClienteParaRetomarEnHome(
+            docQuery.id,
+            docHint: docQuery.data(),
+          );
+        } else if (mostrarViaje && cachedId.isNotEmpty) {
+          bool sigue = true;
+          try {
+            sigue = await ActiveTripService.viajeDocSigueOperativoParaCliente(
+              cachedId,
+              uid,
+            ).timeout(_kBootstrapQueryMaxWait);
+          } on TimeoutException {
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap validar caché timeout',
+            );
+          }
+          if (!sigue && docQuery == null) {
+            mostrarViaje = false;
+            ActiveTripService.cancelarMantenimientoOverlayViaje();
+            unawaited(RaiLocalReadCache.clearActiveTripId(uid));
+            print(
+              '[VIAJE_ACTIVO] cliente_shell bootstrap → caché invalidada, sin viaje',
+            );
+          }
+        }
+      }
+
+      if (!mounted) return;
+      _bootstrapViajeResuelto = true;
+      _bootstrapViajeTimeout?.cancel();
+      print(
+        '[VIAJE_ACTIVO] cliente_shell bootstrap '
+        '${porTimeout ? 'timeout' : 'inicio'} → viaje=$mostrarViaje',
+      );
+      if (_viajeActivoShell != mostrarViaje) {
+        setState(() => _viajeActivoShell = mostrarViaje);
+      }
+      if (!mostrarViaje) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          PoolDeepLink.notifyClienteShellReady();
+        });
+      }
+    } finally {
+      _bootstrapViajeEnCurso = false;
     }
   }
 
@@ -412,9 +663,12 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
     final String? uidOffline = FirebaseAuth.instance.currentUser?.uid;
     // Si ya pedimos overlay (p. ej. tras confirmar viaje), no quedarse en spinner
     // aunque el stream de viajeActivo aún no haya emitido.
-    final bool forzarInicio = ActiveTripService.debeForzarInicioClienteShell;
-    final bool overlayForzado =
-        !forzarInicio && ActiveTripService.debeMantenerOverlayViajeEnShell;
+    final bool forzarInicio = ActiveTripService.clientePostViajeEnHome;
+    final bool suprimirOverlaySolicitud =
+        ActiveTripService.clienteSuprimirOverlayViajeActivo;
+    final bool overlayForzado = !forzarInicio &&
+        !suprimirOverlaySolicitud &&
+        ActiveTripService.debeMantenerOverlayViajeEnShell;
     if (_viajeActivoShell == null && !overlayForzado && !forzarInicio) {
       return Scaffold(
         body: Column(
@@ -431,8 +685,9 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
         ),
       );
     }
-    final bool full =
-        !forzarInicio && (_viajeActivoShell == true || overlayForzado);
+    final bool full = !forzarInicio &&
+        !suprimirOverlaySolicitud &&
+        (_viajeActivoShell == true || overlayForzado);
     if (full) {
       print(
           '[VIAJE_ACTIVO] cliente_shell: pantalla completa ViajeEnCursoCliente (sin tabs)');

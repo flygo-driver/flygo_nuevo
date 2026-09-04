@@ -35,7 +35,8 @@ function taxistaRequiereRenovacionDocumentos(u: AnyMap): boolean {
 /** Paridad con taxistaAprobadoParaOperarPool (Dart). */
 export function taxistaAprobadoParaOperarPool(u: AnyMap): boolean {
   if (taxistaDocsEstado(u) !== "aprobado") return false;
-  if (u.documentosCompletos !== true) return false;
+  const docsOk = u.documentosCompletos === true || u.puedeRecibirViajes === true;
+  if (!docsOk) return false;
   if (taxistaRequiereRenovacionDocumentos(u)) return false;
   return true;
 }

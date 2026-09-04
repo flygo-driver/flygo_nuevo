@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/modelo/viaje.dart';
 import 'package:flygo_nuevo/utils/formatos_moneda.dart';
+import 'package:flygo_nuevo/widgets/cliente_mensaje_operaciones_panel.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_live_conductores.dart';
 import 'package:flygo_nuevo/widgets/cliente_viaje_espera_cronometro.dart';
 import 'package:flygo_nuevo/widgets/metodo_pago_visual_badge.dart';
-import 'package:flygo_nuevo/widgets/rai_asistente_launcher.dart';
 
 /// UI mientras el cliente espera que un taxista acepte (solo presentación).
 class ClienteEsperaTaxistaPanel extends StatelessWidget {
@@ -95,7 +95,7 @@ class ClienteEsperaTaxistaPanel extends StatelessWidget {
               Expanded(
                 child: _TarjetaAyudaRai(
                   sinConductores: sinConductoresVisibles,
-                  onEscribir: () => RaiAsistenteLauncher.abrirAsistente(context),
+                  onEscribir: () => _abrirMensajeOperaciones(context),
                 ),
               ),
             ],
@@ -106,6 +106,83 @@ class ClienteEsperaTaxistaPanel extends StatelessWidget {
           _GarantiaServicioBanner(esMotor: esMotor),
         ],
       ],
+    );
+  }
+
+  void _abrirMensajeOperaciones(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final double bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+        return Padding(
+          padding: EdgeInsets.only(bottom: bottomInset),
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.72,
+            minChildSize: 0.45,
+            maxChildSize: 0.95,
+            expand: false,
+            builder: (_, scrollController) {
+              return Material(
+                color: const Color(0xFF121212),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20)),
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                    ),
+                    const Text(
+                      'Hablar con operaciones RAI',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Cuéntanos si no hay conductor cerca o llevas tiempo esperando. '
+                      'Operaciones recibe tu mensaje en el panel admin.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.68),
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'El asistente RAI (botón ✨ en Inicio) sirve solo para buscar destinos.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 11.5,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    ClienteMensajeOperacionesPanel(
+                      viajeId: viaje.id,
+                      origenPantalla: 'espera_conductor',
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
@@ -502,8 +579,8 @@ class _TarjetaAyudaRai extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             sinConductores
-                ? 'Si no ves un taxista cerca, escríbenos y te ayudamos a enviarte uno.'
-                : '¿Dudas con tu solicitud? Escríbenos y te acompañamos.',
+                ? 'Si no ves un conductor cerca, escribe a operaciones y te ayudamos.'
+                : '¿Dudas con tu solicitud? Escríbenos a operaciones.',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.62),
               fontSize: 11.5,
@@ -515,8 +592,8 @@ class _TarjetaAyudaRai extends StatelessWidget {
             width: double.infinity,
             child: ElevatedButton.icon(
               onPressed: onEscribir,
-              icon: const Icon(Icons.chat_bubble_rounded, size: 18),
-              label: const Text('Escribir a RAI'),
+              icon: const Icon(Icons.support_agent_rounded, size: 18),
+              label: const Text('Escribir a operaciones'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: ClienteEsperaTaxistaPanel._amarillo,
                 foregroundColor: Colors.black,

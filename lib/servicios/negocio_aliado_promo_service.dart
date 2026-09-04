@@ -67,6 +67,8 @@ abstract final class NegocioAliadoPromoService {
     required double precioNominalRd,
     String origen = '',
     String destino = '',
+    String origenGeoExtra = '',
+    String destinoGeoExtra = '',
   }) {
     if (usuario == null || precioNominalRd <= 0 || !precioNominalRd.isFinite) {
       return null;
@@ -92,6 +94,8 @@ abstract final class NegocioAliadoPromoService {
       ciudadNegocio: ciudadNegocio,
       origen: origen,
       destino: destino,
+      origenGeoExtra: origenGeoExtra,
+      destinoGeoExtra: destinoGeoExtra,
     );
     final esGratis = elegibleGratis && localEnPueblo;
     final descuento = esGratis
@@ -116,18 +120,88 @@ abstract final class NegocioAliadoPromoService {
     );
   }
 
+  static Future<NegocioAliadoPromoEval?> evaluarConUbicacion({
+    required Map<String, dynamic>? usuario,
+    required double precioNominalRd,
+    String origen = '',
+    String destino = '',
+    double? latOrigen,
+    double? lonOrigen,
+    double? latDestino,
+    double? lonDestino,
+  }) async {
+    var origenGeoExtra = '';
+    var destinoGeoExtra = '';
+    if (latOrigen != null &&
+        lonOrigen != null &&
+        latOrigen.isFinite &&
+        lonOrigen.isFinite) {
+      origenGeoExtra =
+          await NegocioAliadoGeo.geoTextoDesdeCoordenadas(latOrigen, lonOrigen);
+    }
+    if (latDestino != null &&
+        lonDestino != null &&
+        latDestino.isFinite &&
+        lonDestino.isFinite) {
+      destinoGeoExtra = await NegocioAliadoGeo.geoTextoDesdeCoordenadas(
+        latDestino,
+        lonDestino,
+      );
+    }
+    return evaluar(
+      usuario: usuario,
+      precioNominalRd: precioNominalRd,
+      origen: origen,
+      destino: destino,
+      origenGeoExtra: origenGeoExtra,
+      destinoGeoExtra: destinoGeoExtra,
+    );
+  }
+
   /// Aplica promo al precio del viaje y devuelve payload para Firestore.
   static ({double precioCliente, Map<String, dynamic> campos})? aplicarAlCrearViaje({
     required Map<String, dynamic>? usuario,
     required double precioNominalRd,
     String origen = '',
     String destino = '',
+    String origenGeoExtra = '',
+    String destinoGeoExtra = '',
   }) {
     final eval = evaluar(
       usuario: usuario,
       precioNominalRd: precioNominalRd,
       origen: origen,
       destino: destino,
+      origenGeoExtra: origenGeoExtra,
+      destinoGeoExtra: destinoGeoExtra,
+    );
+    if (eval == null || !eval.activa) return null;
+    return (
+      precioCliente: eval.precioClienteRd,
+      campos: eval.toTripPayload(),
+    );
+  }
+
+  static Future<({double precioCliente, Map<String, dynamic> campos})?>
+      aplicarAlCrearViajeConUbicacion({
+    required Map<String, dynamic>? usuario,
+    required double precioNominalRd,
+    String origen = '',
+    String destino = '',
+    double? latOrigen,
+    double? lonOrigen,
+    double? latDestino,
+    double? lonDestino,
+  }) async {
+    final eval = await evaluarConUbicacion(
+      usuario: usuario,
+      precioNominalRd: precioNominalRd,
+      origen: origen,
+      destino: destino,
+      latOrigen: latOrigen,
+      lonOrigen: lonOrigen,
+      latDestino: latDestino,
+      lonDestino: lonDestino,
     );
     if (eval == null || !eval.activa) return null;
     return (

@@ -25,6 +25,8 @@ void main() {
     });
 
     test('recargo empresa 5% sobre costo operativo', () {
+      // Todos los cargos variables en cero: el costo operativo debe quedar en la
+      // base (1000) para poder aislar el 5% de recargo de empresa.
       const cfg = CorporativoTarifaConfig(
         tasaImpuestoTransferencia: 0.002,
         comisionPlataformaPorcentaje: 10,
@@ -35,6 +37,8 @@ void main() {
         dinamicaPorKmLargoRd: 0,
         dinamicaPorMinutoRd: 0,
         dinamicaMinutosMinimo: 0,
+        dinamicaCargoPorParadaRd: 0,
+        recargoZonaDificilPorcentaje: 0,
         precioCombustibleLitroRd: 0,
       );
       final d = CorporativoTarifaDinamicaModel.calcular(

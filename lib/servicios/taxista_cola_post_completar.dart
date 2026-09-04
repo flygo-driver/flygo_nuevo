@@ -22,7 +22,14 @@ class TaxistaColaPostCompletar {
     required String uidTaxista,
     /// Ruta corporativa informativa cerrada: volver al pool normal, no reabrir corp.
     bool regresarAlPoolNormal = false,
+    String? viajeIdCompletado,
   }) async {
+    // Limpieza inmediata al pulsar «Volver a recibir viajes» (turismo/pool):
+    // evita overlay «Mi viaje en curso» mientras promoverCola tarda en responder.
+    await ActiveTripService.prepararSalidaTaxistaAlInicio(
+      viajeIdCompletado: viajeIdCompletado,
+    );
+
     final PromoverColaTaxistaOutcome outcome =
         await ViajesRepo.promoverColaTrasFinalizarTaxista(
             uidTaxista: uidTaxista);
@@ -127,7 +134,6 @@ class TaxistaColaPostCompletar {
     PoolTimbreReentradaGuard.marcarTrasFinalizarViaje();
     if (regresarAlPoolNormal) {
       ShellTabController.taxistaIrATrabajo();
-      ActiveTripService.cancelarBloqueoShellTaxista();
       unawaited(
         CorporativoTaxistaService.refrescarOperacionChofer(uidTaxista),
       );
@@ -141,9 +147,14 @@ class TaxistaColaPostCompletar {
       return;
     }
     if (context != null && context.mounted) {
-      await NavigationService.irAlInicioTaxista(context: context);
+      await NavigationService.irAlInicioTaxista(
+        context: context,
+        viajeIdCompletado: viajeIdCompletado,
+      );
     } else {
-      await NavigationService.irAlInicioTaxista();
+      await NavigationService.irAlInicioTaxista(
+        viajeIdCompletado: viajeIdCompletado,
+      );
     }
   }
 }

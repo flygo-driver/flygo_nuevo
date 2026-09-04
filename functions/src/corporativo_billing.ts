@@ -21,6 +21,9 @@ import {
   enviarPushUid,
   registrarHistorialNotificacionCorp,
 } from "./corporativo_notificaciones.js";
+import {
+  habilitarViajesCorporativosParaLiquidacionSemanal,
+} from "./corporativo_chofer_liquidacion.js";
 
 type AnyMap = Record<string, unknown>;
 
@@ -860,6 +863,8 @@ export const marcarCuentaCorporativoPagada = onCall(async (request) => {
   const now = new Date();
   let codigoNuevo = "";
   const diasPausa = await obtenerDiasPausaEmpresa(empresaId);
+  let periodoPagadoInicio: Date | null = null;
+  let periodoPagadoFin: Date | null = null;
 
   await db.runTransaction(async (tx) => {
     const eSnap = await tx.get(empresaRef);
@@ -869,6 +874,8 @@ export const marcarCuentaCorporativoPagada = onCall(async (request) => {
     const ed = (eSnap.data() ?? {}) as AnyMap;
     const cicloDias = Math.max(1, Math.trunc(num(ed.facturacionCicloDias) || 15));
     const periodo = (ed.periodoActual ?? {}) as AnyMap;
+    periodoPagadoInicio = parseTs(periodo.inicio);
+    periodoPagadoFin = parseTs(periodo.fin);
     const montoTotalRd = round2(num(periodo.montoTotalRd));
     const viajesCount = Math.trunc(num(periodo.viajesCount));
 
@@ -910,6 +917,17 @@ export const marcarCuentaCorporativoPagada = onCall(async (request) => {
     logger.warn("archivarHistorialOperativoTrasPago", { empresaId, e });
   }
 
+  try {
+    await habilitarViajesCorporativosParaLiquidacionSemanal({
+      empresaId,
+      periodoInicio: periodoPagadoInicio,
+      periodoFin: periodoPagadoFin,
+      pagadoPorUid: request.auth!.uid,
+    });
+  } catch (e) {
+    logger.warn("[CORP_LIQ] marcarCuentaCorporativoPagada", { empresaId, e });
+  }
+
   return { ok: true, empresaId, codigoAcceso: codigoNuevo };
 });
 
@@ -937,12 +955,17 @@ export const marcarLiquidacionCorporativoPagada = onCall(async (request) => {
     .collection("liquidaciones")
     .doc(liquidacionId);
 
+  let periodoPagadoInicio: Date | null = null;
+  let periodoPagadoFin: Date | null = null;
+
   await db.runTransaction(async (tx) => {
     const liqSnap = await tx.get(liqRef);
     if (!liqSnap.exists) {
       throw new HttpsError("not-found", "Liquidación no encontrada");
     }
     const ld = (liqSnap.data() ?? {}) as AnyMap;
+    periodoPagadoInicio = parseTs(ld.periodoInicio);
+    periodoPagadoFin = parseTs(ld.periodoFin);
     const estado = str(ld.estado).toLowerCase();
     if (estado === "pagado") return;
     if (estado !== "pendiente_cobro") {
@@ -967,6 +990,18 @@ export const marcarLiquidacionCorporativoPagada = onCall(async (request) => {
     await archivarHistorialOperativoTrasPago(empresaId);
   } catch (e) {
     logger.warn("archivarHistorialOperativoTrasPago liq", { empresaId, e });
+  }
+
+  try {
+    await habilitarViajesCorporativosParaLiquidacionSemanal({
+      empresaId,
+      periodoInicio: periodoPagadoInicio,
+      periodoFin: periodoPagadoFin,
+      pagadoPorUid: request.auth!.uid,
+      liquidacionEmpresaId: liquidacionId,
+    });
+  } catch (e) {
+    logger.warn("[CORP_LIQ] marcarLiquidacionCorporativoPagada", { empresaId, e });
   }
 
   const renov = await intentarRenovarCodigoTrasSaldarDeuda(empresaId);
@@ -1197,6 +1232,8 @@ export const adminValidarPagoCorporativo = onCall(async (request) => {
 
   // Pago del período abierto validado → archiva como pagado y renueva ciclo + CÓDIGO NUEVO.
   let codigoAccesoNuevo = "";
+  let periodoPagadoInicio: Date | null = null;
+  let periodoPagadoFin: Date | null = null;
   if (accion === "validar" && !liquidacionId && destinoPago === "periodo_actual") {
     const empresaRef = db.collection("empresas_corporativas").doc(empresaId);
     const now = new Date();
@@ -1207,6 +1244,8 @@ export const adminValidarPagoCorporativo = onCall(async (request) => {
       const ed = (eSnap.data() ?? {}) as AnyMap;
       const cicloDias = Math.max(1, Math.trunc(num(ed.facturacionCicloDias) || 15));
       const periodo = (ed.periodoActual ?? {}) as AnyMap;
+      periodoPagadoInicio = parseTs(periodo.inicio);
+      periodoPagadoFin = parseTs(periodo.fin);
       const montoTotalRd = round2(num(periodo.montoTotalRd));
       const viajesCount = Math.trunc(num(periodo.viajesCount));
       if (montoTotalRd > 0 || viajesCount > 0) {
@@ -1269,6 +1308,35 @@ export const adminValidarPagoCorporativo = onCall(async (request) => {
       if (renov.renovado && renov.codigoAcceso) {
         codigoAccesoNuevo = renov.codigoAcceso;
       }
+    }
+
+    let pIni: Date | null = periodoPagadoInicio;
+    let pFin: Date | null = periodoPagadoFin;
+    if (liquidacionId) {
+      const liqSnap = await db
+        .collection("empresas_corporativas")
+        .doc(empresaId)
+        .collection("liquidaciones")
+        .doc(liquidacionId)
+        .get();
+      if (liqSnap.exists) {
+        const ld = (liqSnap.data() ?? {}) as AnyMap;
+        pIni = parseTs(ld.periodoInicio);
+        pFin = parseTs(ld.periodoFin);
+      }
+    }
+
+    try {
+      await habilitarViajesCorporativosParaLiquidacionSemanal({
+        empresaId,
+        periodoInicio: pIni,
+        periodoFin: pFin,
+        pagadoPorUid: request.auth!.uid,
+        liquidacionEmpresaId: liquidacionId || undefined,
+        pagoEmpresaId: pagoId,
+      });
+    } catch (e) {
+      logger.warn("[CORP_LIQ] adminValidarPagoCorporativo", { empresaId, pagoId, e });
     }
   }
 

@@ -5,6 +5,7 @@ import 'package:flygo_nuevo/pantallas/comun/bola_pueblo_actions.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_lista.dart';
 import 'package:flygo_nuevo/pantallas/servicios_extras/pools_cliente_mis_giras.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show rutaBolaPueblo, etiquetaBolaAhorroUi;
+import 'package:flygo_nuevo/widgets/bola_en_desarrollo_aviso.dart';
 import 'package:flygo_nuevo/pantallas/cliente/bola_conductores_en_ruta_cliente.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_repo.dart';
 import 'package:flygo_nuevo/servicios/cliente_viaje_activo_gate.dart';
@@ -131,6 +132,12 @@ class ClienteExperienciasTab extends StatelessWidget {
                       );
                       return;
                     }
+                  }
+                  if (!context.mounted) return;
+                  if (!await BolaEnDesarrolloAviso.intentarEntrarTablero(
+                    context,
+                  )) {
+                    return;
                   }
                   if (!context.mounted) return;
                   if (!await ClienteViajeActivoGate.intentarFlujoNuevoViaje(

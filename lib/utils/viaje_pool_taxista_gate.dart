@@ -127,6 +127,10 @@ class ViajePoolTaxistaGate {
     return !ventanaPublicacionYAceptacionOk(data);
   }
 
+  /// Cliente con reserva futura: pantalla de confirmación, no overlay de viaje.
+  static bool clienteDebeVerConfirmacionProgramado(Map<String, dynamic> data) =>
+      esReservaProgramadaLejana(data);
+
   /// ¿Un viaje ya existente impide crear otro pedido del cliente?
   static bool clienteViajeExistenteBloqueaNuevoPedido(
     Map<String, dynamic> data,
@@ -418,10 +422,12 @@ class ViajePoolTaxistaGate {
     }
     if (data['rechazado'] == true) return false;
 
-    // Taxista canceló (incluso legado republicado a pendiente): no overlay.
+    // Taxista canceló: no overlay salvo que el viaje siga en estado activo
+    // (republicado / misma carrera en curso con `canceladoPor` legado en el doc).
     final String canceladoPor =
         (data['canceladoPor'] ?? '').toString().trim().toLowerCase();
-    if (canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') {
+    if ((canceladoPor == 'taxista' || canceladoPor == 'taxista_forzado') &&
+        !EstadosViaje.activos.contains(st)) {
       return false;
     }
 

@@ -3,6 +3,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../servicios/operaciones_mensajes_adm_repo.dart';
 import '../../servicios/pagos_taxista_repo.dart';
 import '../../servicios/pool_repo.dart';
 import '../../servicios/turismo_control_adm_repo.dart';
@@ -13,6 +14,7 @@ import 'admin_expediente_chofer_utils.dart';
 import 'admin_alertas.dart';
 import 'admin_bola_pueblo_ops.dart';
 import 'admin_home.dart';
+import 'admin_mensajes_operaciones.dart';
 import 'admin_torre_control.dart';
 import 'admin_ui_theme.dart';
 import 'admin_turismo_control.dart';
@@ -67,6 +69,8 @@ class AdminCentroOperaciones extends StatelessWidget {
             detalleFallback: 'Sin alertas nuevas',
             onTap: () => _push(context, const AdminAlertasPage()),
           ),
+          const SizedBox(height: 10),
+          const _MensajesClientesCard(),
           const SizedBox(height: 10),
           _MetricasColaCard(
             metricKey: 'bolasAbiertas',
@@ -596,6 +600,40 @@ class _MetricasLiveBanner extends StatelessWidget {
                 style: TextStyle(color: AdminUi.secondary(context), fontSize: 13),
               ),
             ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Mensajes de clientes esperando conductor: se cuentan los que nadie contestó.
+class _MensajesClientesCard extends StatelessWidget {
+  const _MensajesClientesCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: OperacionesMensajesAdmRepo.streamMensajesAdmin(limite: 60),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snap,
+      ) {
+        final int pendientes = (snap.data?.docs ?? const [])
+            .where((d) => (d.data()['respuesta'] ?? '').toString().trim().isEmpty)
+            .length;
+        return _ColaCard(
+          icon: Icons.forum_outlined,
+          color: Colors.orangeAccent,
+          titulo: 'Mensajes de clientes',
+          subtitulo: 'Colección operaciones_mensajes_adm · sin conductor',
+          count: pendientes,
+          detalle: pendientes == 0 ? 'Todo respondido' : 'Responder ahora',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => const AdminMensajesOperacionesPage(),
+            ),
           ),
         );
       },

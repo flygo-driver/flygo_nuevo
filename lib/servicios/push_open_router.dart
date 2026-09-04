@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_hub_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/corporativo_encargado_deep_link.dart';
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
@@ -99,6 +100,9 @@ abstract final class PushOpenRouter {
       },
       SetOptions(merge: true),
     );
+
+    ActiveTripService.cancelarForzarInicioClienteShell();
+    ActiveTripService.registrarViajeOperativoCliente(viajeId);
 
     await NavigationService.clearAndGoViajeEnCursoCliente(preNav: preNav);
   }

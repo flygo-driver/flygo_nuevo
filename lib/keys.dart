@@ -18,16 +18,21 @@ class AppKeys {
         '237301602510-csi76vsfun9vp4rv2e2818jach4dk28s.apps.googleusercontent.com',
   );
 
+  /// Clave única Maps + Places (Android manifest y REST Dart). Debe coincidir con
+  /// android/app/src/main/res/values/strings.xml → google_maps_api_key
+  static const String _googleMapsPlacesKeyDefault =
+      'AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w';
+
   /// API Key: Places, Geocoding, Directions (REST desde Dart).
   static const String googlePlacesApiKey = String.fromEnvironment(
     'GOOGLE_PLACES_API_KEY',
-    defaultValue: 'AIzaSyAPMeBX8oZCGJsb8iurATEWjePNTUn0ECs',
+    defaultValue: _googleMapsPlacesKeyDefault,
   );
 
   /// Misma clave que Maps SDK (manifest meta-data); por si algún código Dart la necesita.
   static const String googleMapsApiKey = String.fromEnvironment(
     'GOOGLE_MAPS_API_KEY',
-    defaultValue: 'AIzaSyDp-DhgbYE70S0PrpuXzbdZ41Ojs-hKh0w',
+    defaultValue: _googleMapsPlacesKeyDefault,
   );
 }
 

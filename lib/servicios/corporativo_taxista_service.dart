@@ -664,9 +664,10 @@ abstract final class CorporativoTaxistaService {
     return false;
   }
 
-  /// Rutas corporativas B2B: la app cliente no muestra factura, post-viaje ni historial.
+  /// Rutas informativas B2B (encargado): sin factura/post-viaje en app cliente.
+  /// Corporativo con `corporativoModoInformativo: false` usa el flujo normal del pasajero.
   static bool debeOcultarEnAppCliente(Map<String, dynamic> data) {
-    return esViajeCorporativoDoc(data);
+    return esViajeCorporativoDoc(data) && esModoInformativo(data);
   }
 
   /// Comprueba por semilla o lectura puntual del doc `viajes/{id}`.
@@ -1444,16 +1445,13 @@ abstract final class CorporativoTaxistaService {
   }
 
   static Future<void> abrirWazeParada(CorporativoPasajero p) async {
-    if (p.lat != 0 && p.lon != 0) {
+    if (NavegacionExternaLauncher.coordsValidas(p.lat, p.lon)) {
       await NavegacionExternaLauncher.abrirWazeDestino(p.lat, p.lon);
       return;
     }
-    final dir = textoCopiarPasajero(p);
-    if (dir.trim().isNotEmpty) {
-      await NavegacionExternaLauncher.abrirGoogleMapsDireccion(dir);
-      return;
-    }
-    throw StateError('Esta parada no tiene dirección ni GPS');
+    throw StateError(
+      'Esta parada no tiene GPS. Revisá la ruta corporativa en RAI.',
+    );
   }
 
   static Future<void> abrirRutaGlobalDesdeEmpresa(
@@ -2044,17 +2042,22 @@ abstract final class CorporativoTaxistaService {
   static Future<void> abrirWazeDesdeViaje(Map<String, dynamic> data) async {
     final url = wazeUrlDe(data);
     if (url != null) {
-      final uri = Uri.tryParse(url);
-      if (uri != null && await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-        return;
-      }
+      final ok = await NavegacionExternaLauncher.abrirEnlaceNavegacion(url);
+      if (ok) return;
     }
-    final lat = (data['latCliente'] as num?)?.toDouble();
-    final lon = (data['lonCliente'] as num?)?.toDouble();
-    if (lat != null && lon != null && lat != 0 && lon != 0) {
-      await NavegacionExternaLauncher.abrirWazeDestino(lat, lon);
+    final origen = MultiparadaRutaHelper.origenParaNavegacion(
+      viajeData: data,
+      latClienteModelo: (data['latCliente'] as num?)?.toDouble() ?? 0,
+      lonClienteModelo: (data['lonCliente'] as num?)?.toDouble() ?? 0,
+      labelOrigen: (data['origen'] ?? '').toString(),
+    );
+    if (origen != null) {
+      await NavegacionExternaLauncher.abrirWazeDestino(origen.lat, origen.lon);
+      return;
     }
+    throw StateError(
+      'Sin coordenadas GPS de recogida. Revisá la ruta en RAI.',
+    );
   }
 
   static List<Map<String, dynamic>> _fijasDesdeChoferDoc(

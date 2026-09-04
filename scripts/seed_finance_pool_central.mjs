@@ -28,7 +28,7 @@ const patch = {
   poolRecaudoSoloNuevasGiras: true,
   poolLiquidacionAlFinalizar: true,
   poolRecaudoAutoVerificarConciliacion: true,
-  transferenciaRecaudoEnCuentaRai: true,
+  transferenciaRecaudoEnCuentaRai: false,
   conciliacionAutomaticaHabilitada: true,
 };
 

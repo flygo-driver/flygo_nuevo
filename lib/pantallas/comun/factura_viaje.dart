@@ -44,6 +44,7 @@ class FacturaViaje extends StatelessWidget {
     required this.viajeId,
     this.role = 'cliente',
     this.autoCerrarAlContinuar = false,
+    this.viajeDataSemilla,
   });
 
   final String viajeId;
@@ -53,6 +54,10 @@ class FacturaViaje extends StatelessWidget {
   /// conductor ya vio el comprobante) y deja seguir post-viaje / cola.
   final bool autoCerrarAlContinuar;
 
+  /// Datos ya conocidos al abrir (p. ej. stream del viaje en curso). Evita
+  /// pantalla «no encontramos el registro» si Firestore tarda o reconecta.
+  final Map<String, dynamic>? viajeDataSemilla;
+
   /// Helper para abrir la factura desde cualquier parte de la app.
   /// Usa `rootNavigator` para que el modal viva por encima de los Navigators
   /// anidados de los Shells (ClienteShell, TaxistaShell).
@@ -61,13 +66,14 @@ class FacturaViaje extends StatelessWidget {
     required String viajeId,
     String role = 'cliente',
     bool autoCerrarAlContinuar = false,
+    Map<String, dynamic>? viajeDataSemilla,
   }) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
     if (role == 'cliente') {
       try {
-        final snap = await FirebaseFirestore.instance
-            .collection('viajes')
-            .doc(viajeId.trim())
-            .get();
+        final snap =
+            await FirebaseFirestore.instance.collection('viajes').doc(id).get();
         final d = snap.data();
         if (d != null && CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
           return;
@@ -78,13 +84,31 @@ class FacturaViaje extends StatelessWidget {
     await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
         builder: (_) => FacturaViaje(
-          viajeId: viajeId,
+          viajeId: id,
           role: role,
           autoCerrarAlContinuar: autoCerrarAlContinuar,
+          viajeDataSemilla: viajeDataSemilla == null
+              ? null
+              : Map<String, dynamic>.from(viajeDataSemilla),
         ),
         fullscreenDialog: true,
       ),
     );
+  }
+
+  static Map<String, dynamic>? _dataDesdeSnapOSemilla({
+    required AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snap,
+    Map<String, dynamic>? semilla,
+  }) {
+    if (snap.hasData && snap.data!.exists) {
+      final Map<String, dynamic>? remoto = snap.data!.data();
+      if (remoto != null && remoto.isNotEmpty) {
+        if (semilla == null || semilla.isEmpty) return remoto;
+        return <String, dynamic>{...semilla, ...remoto};
+      }
+    }
+    if (semilla != null && semilla.isNotEmpty) return semilla;
+    return null;
   }
 
   @override
@@ -152,32 +176,57 @@ class FacturaViaje extends StatelessWidget {
               .doc(viajeId)
               .snapshots(),
           builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting &&
-              !snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (!snap.hasData || !snap.data!.exists) {
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: Text(
-                  'No encontramos el registro de este viaje en la plataforma RAI.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.onSurfaceVariant),
-                ),
-              ),
+            final Map<String, dynamic>? data = _dataDesdeSnapOSemilla(
+              snap: snap,
+              semilla: viajeDataSemilla,
             );
-          }
-          final data = snap.data!.data() ?? <String, dynamic>{};
-          if (role == 'cliente' &&
-              CorporativoTaxistaService.debeOcultarEnAppCliente(data)) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (context.mounted) {
-                Navigator.of(context, rootNavigator: true).maybePop();
+            if (data == null) {
+              if (snap.connectionState == ConnectionState.waiting &&
+                  !snap.hasData &&
+                  (viajeDataSemilla == null || viajeDataSemilla!.isEmpty)) {
+                return _FacturaEsperaRegistroPanel(
+                  onContinuar: () {
+                    Navigator.of(context, rootNavigator: true).maybePop();
+                  },
+                );
               }
-            });
-            return const SizedBox.shrink();
-          }
+              return Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        snap.hasError
+                            ? 'No pudimos cargar el comprobante ahora. '
+                                'Tu viaje ya está cerrado; podés continuar.'
+                            : 'No encontramos el registro de este viaje en la plataforma RAI.',
+                        textAlign: TextAlign.center,
+                        style:
+                            TextStyle(color: cs.onSurfaceVariant, height: 1.35),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: () {
+                          Navigator.of(context, rootNavigator: true).maybePop();
+                        },
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                        label: const Text('Continuar'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+            if (role == 'cliente' &&
+                CorporativoTaxistaService.debeOcultarEnAppCliente(data)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (context.mounted) {
+                  Navigator.of(context, rootNavigator: true).maybePop();
+                }
+              });
+              return const SizedBox.shrink();
+            }
             return _FacturaContent(
               viajeId: viajeId,
               data: data,
@@ -196,27 +245,27 @@ bool facturaViajeListaParaContinuarFlujo({
   required Map<String, dynamic> data,
   required String role,
 }) {
-  if (!viajeDocCompletado(data)) return false;
-
-  final String metodo =
-      (data['metodoPago'] ?? 'Efectivo').toString().trim();
-
+  // Conductor: puede seguir al recibo/cola aunque Firestore tarde en marcar completado.
   if (role == 'taxista') return true;
 
-  if (MetodoPagoViaje.cobroClienteBloqueaApp(data) &&
-      !MetodoPagoViaje.impagoRegistrado(data)) {
-    return false;
-  }
+  if (!viajeDocCompletado(data)) return false;
+
+  final String metodo = (data['metodoPago'] ?? 'Efectivo').toString().trim();
 
   if (MetodoPagoViaje.esEfectivo(metodo)) return true;
+
+  if (MetodoPagoViaje.impagoRegistrado(data)) return true;
+
+  if (MetodoPagoViaje.cobroClienteBloqueaApp(data)) {
+    return false;
+  }
 
   if (MetodoPagoViaje.esTarjeta(metodo)) {
     final String ep =
         (data['estadoPago'] ?? '').toString().trim().toLowerCase();
     final dynamic pay = data['payment'];
-    final String ps = pay is Map
-        ? (pay['status'] ?? '').toString().trim().toLowerCase()
-        : '';
+    final String ps =
+        pay is Map ? (pay['status'] ?? '').toString().trim().toLowerCase() : '';
     return ep == 'verificado' || ps == 'captured';
   }
 
@@ -240,6 +289,18 @@ bool facturaTarjetaPendienteCliente({
 }) {
   if (role != 'cliente') return false;
   return MetodoPagoViaje.cobroClienteBloqueaApp(data);
+}
+
+/// El botón de cierre solo se apaga mientras un cierre está en vuelo o cuando el
+/// pago con tarjeta aún bloquea al cliente. Nunca por haberse dado por cerrado:
+/// si la factura sigue en pantalla, el usuario tiene que poder insistir.
+bool facturaBotonContinuarActivo({
+  required Map<String, dynamic> data,
+  required String role,
+  required bool cerrandoFactura,
+}) {
+  if (cerrandoFactura) return false;
+  return role != 'cliente' || facturaClientePuedeCerrar(data: data, role: role);
 }
 
 bool facturaClientePuedeCerrar({
@@ -273,6 +334,7 @@ class _FacturaContentState extends State<_FacturaContent> {
   bool _autoCierreProgramado = false;
   bool _listaParaContinuarPrev = false;
   bool _facturaCerrada = false;
+  bool _cerrandoFactura = false;
 
   @override
   void initState() {
@@ -289,7 +351,40 @@ class _FacturaContentState extends State<_FacturaContent> {
     }
   }
 
+  /// Cierra **su propia** ruta. Con un `pop()` a ciegas, si otra pantalla quedó
+  /// encima se cerraba esa y la factura seguía visible dándose por cerrada, con
+  /// el botón «Continuar» apagado y sin más salida que la X.
+  Future<bool> _popFacturaRoot({int intentos = 10}) async {
+    for (int i = 0; i < intentos; i++) {
+      if (!mounted) return false;
+      final ModalRoute<dynamic>? propia = ModalRoute.of<dynamic>(context);
+      final NavigatorState? nav =
+          propia?.navigator ?? Navigator.maybeOf(context, rootNavigator: true);
+      if (nav != null && nav.mounted) {
+        if (propia == null) {
+          if (nav.canPop()) {
+            nav.pop();
+            return true;
+          }
+        } else if (propia.isCurrent) {
+          nav.pop();
+          return true;
+        } else if (propia.isActive) {
+          nav.removeRoute(propia);
+          return true;
+        } else {
+          return true; // Ya salió del árbol.
+        }
+      }
+      await Future<void>.delayed(Duration(milliseconds: 35 * (i + 1)));
+    }
+    return false;
+  }
+
   Future<void> _intentarCerrarFactura({String? snack}) async {
+    // `_facturaCerrada` no bloquea reintentos: si seguimos en pantalla, el cierre
+    // anterior no llegó a sacarnos y el usuario debe poder insistir.
+    if (_cerrandoFactura) return;
     if (!facturaClientePuedeCerrar(
       data: widget.data,
       role: widget.role,
@@ -307,28 +402,33 @@ class _FacturaContentState extends State<_FacturaContent> {
       );
       return;
     }
-    _cerrarFactura(snack: snack);
+    if (!mounted) return;
+    setState(() => _cerrandoFactura = true);
+    final bool ok = await _popFacturaRoot();
+    if (!mounted) return;
+    if (ok) {
+      if (snack != null && snack.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(snack), duration: const Duration(seconds: 2)),
+        );
+      }
+      setState(() {
+        _facturaCerrada = true;
+        _cerrandoFactura = false;
+      });
+      return;
+    }
+    setState(() => _cerrandoFactura = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('No se pudo cerrar. Tocá de nuevo «Continuar».'),
+        duration: Duration(seconds: 3),
+      ),
+    );
   }
 
   void _cerrarFactura({String? snack}) {
-    if (_facturaCerrada || !mounted) return;
-    if (snack != null && snack.isNotEmpty) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text(snack), duration: const Duration(seconds: 2)),
-      );
-    }
-    _facturaCerrada = true;
-    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
-    if (rootNav.canPop()) {
-      rootNav.pop();
-      return;
-    }
-    final NavigatorState? localNav = Navigator.maybeOf(context);
-    if (localNav != null && localNav.canPop()) {
-      localNav.pop();
-      return;
-    }
-    _facturaCerrada = false;
+    unawaited(_intentarCerrarFactura(snack: snack));
   }
 
   void _revisarAutoCierre() {
@@ -363,10 +463,10 @@ class _FacturaContentState extends State<_FacturaContent> {
       final String msg = widget.role == 'taxista'
           ? 'Comprobante listo. Volviendo al trabajo…'
           : MetodoPagoViaje.esTransferencia(
-                  (widget.data['metodoPago'] ?? '').toString()) &&
-              widget.data['transferenciaConfirmada'] != true
-          ? 'Comprobante recibido. Puedes seguir; RAI validará el pago.'
-          : 'Pago listo. Continuando…';
+                      (widget.data['metodoPago'] ?? '').toString()) &&
+                  widget.data['transferenciaConfirmada'] != true
+              ? 'Comprobante recibido. Puedes seguir; RAI validará el pago.'
+              : 'Pago listo. Continuando…';
       _cerrarFactura(snack: msg);
     });
   }
@@ -396,29 +496,26 @@ class _FacturaContentState extends State<_FacturaContent> {
   /// están vacíos (viajes antiguos o fallo de escritura), retorna `null`
   /// para que el caller haga el fallback live a `usuarios/{uidTaxista}`.
   _DatosBancarios? _bancariosDesdeViaje() {
-    final String banco = (data['bancoTaxista'] ??
-            data['bancoTaxistaSnapshot'] ??
-            '')
-        .toString()
-        .trim();
+    final String banco =
+        (data['bancoTaxista'] ?? data['bancoTaxistaSnapshot'] ?? '')
+            .toString()
+            .trim();
     final String cuenta = (data['numeroCuentaTaxista'] ??
             data['numeroCuentaTaxistaSnapshot'] ??
             '')
         .toString()
         .trim();
-    final String tipoCuenta = (data['tipoCuentaTaxista'] ??
-            data['tipoCuentaTaxistaSnapshot'] ??
-            '')
-        .toString()
-        .trim();
+    final String tipoCuenta =
+        (data['tipoCuentaTaxista'] ?? data['tipoCuentaTaxistaSnapshot'] ?? '')
+            .toString()
+            .trim();
     final String titular = (data['titularCuentaTaxista'] ??
             data['titularCuentaTaxistaSnapshot'] ??
             '')
         .toString()
         .trim();
-    final String ci = (data['ciTaxista'] ?? data['cedulaTaxista'] ?? '')
-        .toString()
-        .trim();
+    final String ci =
+        (data['ciTaxista'] ?? data['cedulaTaxista'] ?? '').toString().trim();
 
     if (banco.isEmpty &&
         cuenta.isEmpty &&
@@ -514,7 +611,8 @@ class _FacturaContentState extends State<_FacturaContent> {
     final bool esTransferencia = MetodoPagoViaje.esTransferencia(metodoPago);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoPago);
     final bool esTarjeta = MetodoPagoViaje.esTarjeta(metodoPago);
-    final bool usaRecaudoRai = TransferenciaRecaudoUi.viajeUsaRecaudoEnCuentaRai(data);
+    final bool usaRecaudoRai =
+        TransferenciaRecaudoUi.viajeUsaRecaudoEnCuentaRai(data);
     final double total = totalRdDesdeDocViaje(data);
     final bool montoPendienteServidor =
         viajeDocCompletado(data) && total <= 1e-6;
@@ -555,18 +653,20 @@ class _FacturaContentState extends State<_FacturaContent> {
     final double gananciaCond = liq.ganancia;
     final double peaje = _peajeDesdeData();
     final List<Map<String, dynamic>> waypoints = _waypointsDesdeData();
-    final List<Map<String, dynamic>> visitadas = data['multiparadaParadasVisitadas']
-            is List
-        ? List<Map<String, dynamic>>.from(
-            (data['multiparadaParadasVisitadas'] as List).map(
-              (dynamic e) =>
-                  e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{},
-            ),
-          )
-        : <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> visitadas =
+        data['multiparadaParadasVisitadas'] is List
+            ? List<Map<String, dynamic>>.from(
+                (data['multiparadaParadasVisitadas'] as List).map(
+                  (dynamic e) => e is Map
+                      ? Map<String, dynamic>.from(e)
+                      : <String, dynamic>{},
+                ),
+              )
+            : <Map<String, dynamic>>[];
     bool _legVisitado(int legIndex) {
       for (final Map<String, dynamic> v in visitadas) {
-        if (v['legIndex'] is num && (v['legIndex'] as num).toInt() == legIndex) {
+        if (v['legIndex'] is num &&
+            (v['legIndex'] as num).toInt() == legIndex) {
           return true;
         }
       }
@@ -594,14 +694,24 @@ class _FacturaContentState extends State<_FacturaContent> {
     );
     final bool impagoCliente =
         role == 'cliente' && MetodoPagoViaje.impagoRegistrado(data);
-    final bool bloqueaCierreCliente =
-        role == 'cliente' && !facturaClientePuedeCerrar(data: data, role: role);
+    final bool puedeCerrarFactura =
+        role != 'cliente' || facturaClientePuedeCerrar(data: data, role: role);
+    final bool bloqueaCierreCliente = role == 'cliente' && !puedeCerrarFactura;
+    final bool botonContinuarActivo = facturaBotonContinuarActivo(
+      data: data,
+      role: role,
+      cerrandoFactura: _cerrandoFactura,
+    );
+    final bool botonEstiloPendienteTarjeta = role == 'cliente' &&
+        tarjetaPendienteCliente &&
+        !impagoCliente &&
+        !MetodoPagoViaje.esEfectivo(metodoPago);
     final String etiquetaBotonCierre = widget.autoCerrarAlContinuar
         ? 'Continuar'
         : impagoCliente
             ? 'Entendido, tengo deuda pendiente'
             : tarjetaPendienteCliente
-                ? 'Pagá para continuar'
+                ? 'Pagá con tarjeta o efectivo'
                 : 'Entendido, cerrar comprobante';
 
     return PopScope(
@@ -611,468 +721,548 @@ class _FacturaContentState extends State<_FacturaContent> {
         await _intentarCerrarFactura();
       },
       child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: ListView(
-      padding: EdgeInsets.fromLTRB(20, 12, 20, bottomScrollPad),
-      children: [
-        _FacturaViajeDocBanner(cs: cs, tt: Theme.of(context).textTheme),
-        const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.fromLTRB(18, 20, 18, 22),
-          decoration: BoxDecoration(
-            color: isDark ? RaiDriverColors.cardElevated : cs.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: neon.withValues(alpha: isDark ? 0.45 : 0.35),
-            ),
-            boxShadow: isDark
-                ? [
-                    BoxShadow(
-                      color: neon.withValues(alpha: 0.08),
-                      blurRadius: 24,
-                      offset: const Offset(0, 8),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, bottomScrollPad),
+              children: [
+                _FacturaViajeDocBanner(cs: cs, tt: Theme.of(context).textTheme),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 20, 18, 22),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? RaiDriverColors.cardElevated
+                        : cs.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: neon.withValues(alpha: isDark ? 0.45 : 0.35),
                     ),
-                  ]
-                : null,
-          ),
-          child: Column(
-            children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: neon.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: neon.withValues(alpha: 0.4)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.verified_outlined, size: 18, color: neon),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        'SERVICIO FINALIZADO',
-                        textAlign: TextAlign.center,
-                        style:
-                            Theme.of(context).textTheme.labelLarge?.copyWith(
-                                  color: neon,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 0.6,
-                                ),
+                    boxShadow: isDark
+                        ? [
+                            BoxShadow(
+                              color: neon.withValues(alpha: 0.08),
+                              blurRadius: 24,
+                              offset: const Offset(0, 8),
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: neon.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border:
+                              Border.all(color: neon.withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.verified_outlined,
+                                size: 18, color: neon),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                'SERVICIO FINALIZADO',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelLarge
+                                    ?.copyWith(
+                                      color: neon,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.6,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(height: 16),
+                      Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: estadoUI.color.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(estadoUI.icon,
+                            color: estadoUI.color, size: 36),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Viaje completado',
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _fechaLegible(),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'ID de operación',
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelSmall
+                            ?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        viajeId,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: viajeId));
+                        },
+                        icon: const Icon(Icons.copy_rounded, size: 18),
+                        label: const Text('Copiar ID'),
+                      ),
+                      const SizedBox(height: 8),
+                      _SelloEstado(estado: estadoUI),
+                      if (!montoPendienteServidor && total > 1e-6) ...[
+                        const SizedBox(height: 20),
+                        Text(
+                          FormatosMoneda.rd(total),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context)
+                              .textTheme
+                              .displaySmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w900,
+                                color: neon,
+                                letterSpacing: -0.5,
+                                height: 1.05,
+                              ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Total del servicio',
+                          textAlign: TextAlign.center,
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    color: cs.onSurfaceVariant,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                        ),
+                        if (data['precioAjustadoPorVehiculo'] == true) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Tarifa ajustada: pediste '
+                            '${data['precioAjusteVehiculoSolicitado'] ?? 'otro vehículo'}'
+                            ' y te recogió un '
+                            '${data['precioAjusteVehiculoAsignado'] ?? 'vehículo distinto'}'
+                            ', así que pagas la tarifa del que llegó.',
+                            textAlign: TextAlign.center,
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: cs.onSurfaceVariant,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                          ),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                _SectionCard(
+                  title: _esViajeMulti
+                      ? 'Itinerario (múltiples paradas)'
+                      : 'Itinerario',
+                  children: [
+                    _Row(
+                      icon: Icons.my_location_rounded,
+                      iconColor: cs.primary,
+                      label: 'Origen',
+                      value: origen.isEmpty ? '—' : origen,
+                    ),
+                    ...waypoints.asMap().entries.map(
+                      (MapEntry<int, Map<String, dynamic>> e) {
+                        final String label =
+                            (e.value['label'] ?? 'Parada ${e.key + 1}')
+                                .toString();
+                        final bool ok = _legVisitado(e.key);
+                        return _Row(
+                          icon: ok
+                              ? Icons.check_circle_rounded
+                              : Icons.place_outlined,
+                          iconColor: ok ? Colors.green.shade700 : cs.secondary,
+                          label: 'Parada ${e.key + 1}${ok ? ' ✓' : ''}',
+                          value: label,
+                        );
+                      },
+                    ),
+                    _Row(
+                      icon: _legVisitado(waypoints.length)
+                          ? Icons.check_circle_rounded
+                          : Icons.flag_rounded,
+                      iconColor: _legVisitado(waypoints.length)
+                          ? Colors.green.shade700
+                          : cs.error,
+                      label:
+                          'Destino final${_legVisitado(waypoints.length) ? ' ✓' : ''}',
+                      value: destino.isEmpty ? '—' : destino,
+                    ),
+                    if (distanciaKm > 0)
+                      _Row(
+                        icon: Icons.straighten_rounded,
+                        iconColor: cs.tertiary,
+                        label: 'Distancia',
+                        value: FormatosMoneda.km(distanciaKm),
+                      ),
+                  ],
+                ),
+                if (montoPendienteServidor) ...[
+                  const SizedBox(height: 12),
+                  const _SectionCard(
+                    title: 'Confirmando monto',
+                    children: [
+                      _InfoBanner(
+                        icon: Icons.hourglass_top_rounded,
+                        color: Colors.orange,
+                        text:
+                            'El servidor está registrando el monto final del viaje. '
+                            'Este comprobante se actualizará solo en unos segundos; '
+                            'no cierres la app.',
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 12),
+                _SectionCard(
+                  title: 'Importe y forma de pago',
+                  children: [
+                    MetodoPagoVisualCard(
+                      metodoPago: metodoPago,
+                      viajeData: data,
+                      corporativo: esCorporativo,
+                      usaRecaudoRai: usaRecaudoRai,
+                      estadoSello: estadoUI.label,
+                      estadoColor: estadoUI.color,
+                    ),
+                    const SizedBox(height: 14),
+                    if (etiquetaServicio.isNotEmpty)
+                      _Row(
+                        icon: Icons.local_taxi_rounded,
+                        iconColor: cs.tertiary,
+                        label: 'Tipo de servicio',
+                        value: etiquetaServicio,
+                      ),
+                    if (tarifaBase > 0)
+                      _Row(
+                        icon: Icons.confirmation_number_rounded,
+                        iconColor: cs.outline,
+                        label: 'Tarifa base',
+                        value: FormatosMoneda.rd(tarifaBase),
+                      ),
+                    if (peaje > 0)
+                      _Row(
+                        icon: Icons.toll_rounded,
+                        iconColor: cs.outline,
+                        label: 'Peaje incluido',
+                        value: FormatosMoneda.rd(peaje),
+                      ),
+                    _Row(
+                      icon: Icons.payments_rounded,
+                      iconColor: cs.primary,
+                      label: esCorporativo && esTaxista
+                          ? 'Tu neto acumulado (RD\$)'
+                          : 'Total del servicio (RD\$)',
+                      value: montoPendienteServidor
+                          ? 'Confirmando…'
+                          : FormatosMoneda.rd(
+                              esCorporativo && esTaxista ? gananciaCond : total,
+                            ),
+                      valueBold: true,
+                    ),
+                    if (esCorporativo && esTaxista && total > 1e-6)
+                      _Row(
+                        icon: Icons.receipt_long_outlined,
+                        iconColor: cs.outline,
+                        label: 'Tarifa ruta (empresa)',
+                        value: FormatosMoneda.rd(total),
+                      ),
+                  ],
+                ),
+                if (mostrarLiquidacionTx) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Liquidación RAI (conductor)',
+                    children: [
+                      _Row(
+                        icon: Icons.percent_rounded,
+                        iconColor: cs.tertiary,
+                        label: 'Comisión plataforma RAI',
+                        value: FormatosMoneda.rd(comisionCond),
+                      ),
+                      _Row(
+                        icon: Icons.savings_outlined,
+                        iconColor: Colors.green.shade700,
+                        label: 'Ingreso neto para el conductor',
+                        value: FormatosMoneda.rd(gananciaCond),
+                        valueBold: true,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        esCorporativo
+                            ? 'Ruta corporativa B2B: este neto se acumula en Ganancias → Corporativo. '
+                                'RAI cobra a la empresa y te transfiere al liquidar el período.'
+                            : esEfectivo
+                                ? 'Los montos reflejan el cierre en servidor. En efectivo, la comisión RAI '
+                                    'impacta tu prepago y/o comisión pendiente; regularizá en Mis pagos.'
+                                : 'Los montos reflejan el cierre en servidor. En transferencia, cobrás el '
+                                    'neto al pasajero y la comisión RAI se descuenta de tu prepago (recarga); '
+                                    'si no alcanzó, queda como comisión pendiente. Regularizá en Mis pagos.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                              height: 1.35,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (esEfectivo) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    title: 'Instrucción de pago en efectivo',
+                    children: [
+                      _InfoBanner(
+                        icon: Icons.attach_money_rounded,
+                        color: Colors.green,
+                        text: role == 'taxista'
+                            ? 'Cobrá ${FormatosMoneda.rd(total)} en efectivo al pasajero, conforme al servicio prestado.'
+                            : 'Entregá ${FormatosMoneda.rd(total)} en efectivo al conductor al concluir el traslado.',
+                      ),
+                    ],
+                  ),
+                ],
+                if (esTransferencia && !esCorporativo) ...[
+                  const SizedBox(height: 12),
+                  if (usaRecaudoRai)
+                    _FacturaSectionRecaudoRai(
+                      viajeId: viajeId,
+                      role: role,
+                      data: data,
+                      total: total,
+                      transferenciaConfirmada: transferenciaConfirmada,
+                      estadoPago: estadoPago,
+                      comprobanteUrl: comprobanteUrl,
+                      uidTaxista: uidTaxista,
+                    )
+                  else
+                    _SectionTransferencia(
+                      viajeId: viajeId,
+                      role: role,
+                      total: total,
+                      montoPendienteServidor: montoPendienteServidor,
+                      uidTaxista: uidTaxista,
+                      snap: snapBancario,
+                      comprobanteUrl: comprobanteUrl,
+                      transferenciaConfirmada: transferenciaConfirmada,
+                      estadoPago: estadoPago,
+                      paymentStatus: paymentStatus,
+                      motivoRechazo: motivoRechazo,
+                    ),
+                ],
+                if (esEfectivo &&
+                    role == 'cliente' &&
+                    MetodoPagoViaje.cambioDesdeTarjetaAEfectivo(data)) ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.greenAccent.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      child: Text(
+                        'Pagás en efectivo al conductor: ${FormatosMoneda.rd(total)}. '
+                        'Entregá el monto y tocá «Continuar» para calificar el servicio.',
+                        style: const TextStyle(fontSize: 13, height: 1.35),
+                      ),
+                    ),
+                  ),
+                ],
+                if (esTarjeta) ...[
+                  const SizedBox(height: 12),
+                  if (tarjetaPendienteCliente && !impagoCliente)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.orangeAccent.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: const Text(
+                          'Pago pendiente: pagá con tarjeta abajo o tocá «Pagar en efectivo al conductor». '
+                          'Cuando el método quede en efectivo, podrás continuar.',
+                          style: TextStyle(fontSize: 13, height: 1.35),
+                        ),
+                      ),
+                    ),
+                  if (impagoCliente)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.redAccent.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Text(
+                          'Deuda registrada con RAI por '
+                          '${FormatosMoneda.rd(MetodoPagoViaje.cobroClienteMontoRd(data))}. '
+                          'No podrás pedir viajes hasta pagar. Contactá soporte en la app si necesitás ayuda.',
+                          style: const TextStyle(fontSize: 13, height: 1.35),
+                        ),
+                      ),
+                    ),
+                  _SectionCard(
+                    title: 'Pago con tarjeta',
+                    children: [
+                      RaiPagoTarjetaPanel(
+                        viajeId: viajeId,
+                        viajeData: data,
+                        montoRd: total,
+                        role: role,
+                        modoViajeEnCurso: tarjetaPendienteCliente,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  RaiReciboTarjetaPanel(
+                    recibo: ReciboTarjetaAzul.fromViaje(
+                      viajeId: viajeId,
+                      data: data,
+                      montoRd: total,
+                    ),
+                    fondoOscuro: isDark,
+                  ),
+                ],
+                if (esTaxista) ...[
+                  const SizedBox(height: 12),
+                  TaxistaRegistrarImpagoButton(
+                    viajeId: viajeId,
+                    metodoPagoFallback: metodoPago,
+                  ),
+                  _FacturaPanelComisionRecargaBloqueo(
+                    uidTaxista: uidTaxista,
+                    esEfectivo: esEfectivo,
+                    esTransferencia: esTransferencia,
+                    esCorporativo: esCorporativo,
+                    comisionViaje: comisionCond,
+                    gananciaViaje: gananciaCond,
+                    lineaSaldoPrepagoFactura: _lineaSaldoPrepagoFactura(),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                _SectionCard(
+                  title: 'Aviso legal breve',
+                  muted: true,
+                  children: [
+                    Text(
+                      'Documento informativo generado electrónicamente a partir de los datos registrados '
+                      'en la plataforma RAI. Conservalo como respaldo ante consultas o conciliaciones. '
+                      'El estado del pago por transferencia puede actualizarse cuando se valide el comprobante.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                            height: 1.4,
+                          ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: estadoUI.color.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(estadoUI.icon, color: estadoUI.color, size: 36),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Viaje completado',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _fechaLegible(),
-                textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyMedium
-                    ?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'ID de operación',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 4),
-              SelectableText(
-                viajeId,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-              TextButton.icon(
-                onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: viajeId));
-                },
-                icon: const Icon(Icons.copy_rounded, size: 18),
-                label: const Text('Copiar ID'),
-              ),
-              const SizedBox(height: 8),
-              _SelloEstado(estado: estadoUI),
-              if (!montoPendienteServidor && total > 1e-6) ...[
-                const SizedBox(height: 20),
-                Text(
-                  FormatosMoneda.rd(total),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: neon,
-                        letterSpacing: -0.5,
-                        height: 1.05,
-                      ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Total del servicio',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
               ],
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 18),
-        _SectionCard(
-          title: _esViajeMulti ? 'Itinerario (múltiples paradas)' : 'Itinerario',
-          children: [
-            _Row(
-              icon: Icons.my_location_rounded,
-              iconColor: cs.primary,
-              label: 'Origen',
-              value: origen.isEmpty ? '—' : origen,
-            ),
-            ...waypoints.asMap().entries.map(
-              (MapEntry<int, Map<String, dynamic>> e) {
-                final String label =
-                    (e.value['label'] ?? 'Parada ${e.key + 1}').toString();
-                final bool ok = _legVisitado(e.key);
-                return _Row(
-                  icon: ok ? Icons.check_circle_rounded : Icons.place_outlined,
-                  iconColor: ok ? Colors.green.shade700 : cs.secondary,
-                  label: 'Parada ${e.key + 1}${ok ? ' ✓' : ''}',
-                  value: label,
-                );
-              },
-            ),
-            _Row(
-              icon: _legVisitado(waypoints.length)
-                  ? Icons.check_circle_rounded
-                  : Icons.flag_rounded,
-              iconColor: _legVisitado(waypoints.length)
-                  ? Colors.green.shade700
-                  : cs.error,
-              label: 'Destino final${_legVisitado(waypoints.length) ? ' ✓' : ''}',
-              value: destino.isEmpty ? '—' : destino,
-            ),
-            if (distanciaKm > 0)
-              _Row(
-                icon: Icons.straighten_rounded,
-                iconColor: cs.tertiary,
-                label: 'Distancia',
-                value: FormatosMoneda.km(distanciaKm),
-              ),
-          ],
-        ),
-        if (montoPendienteServidor) ...[
-          const SizedBox(height: 12),
-          const _SectionCard(
-            title: 'Confirmando monto',
-            children: [
-              _InfoBanner(
-                icon: Icons.hourglass_top_rounded,
-                color: Colors.orange,
-                text:
-                    'El servidor está registrando el monto final del viaje. '
-                    'Este comprobante se actualizará solo en unos segundos; '
-                    'no cierres la app.',
-              ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 12),
-        _SectionCard(
-          title: 'Importe y forma de pago',
-          children: [
-            MetodoPagoVisualCard(
-              metodoPago: metodoPago,
-              viajeData: data,
-              corporativo: esCorporativo,
-              usaRecaudoRai: usaRecaudoRai,
-              estadoSello: estadoUI.label,
-              estadoColor: estadoUI.color,
-            ),
-            const SizedBox(height: 14),
-            if (etiquetaServicio.isNotEmpty)
-              _Row(
-                icon: Icons.local_taxi_rounded,
-                iconColor: cs.tertiary,
-                label: 'Tipo de servicio',
-                value: etiquetaServicio,
-              ),
-            if (tarifaBase > 0)
-              _Row(
-                icon: Icons.confirmation_number_rounded,
-                iconColor: cs.outline,
-                label: 'Tarifa base',
-                value: FormatosMoneda.rd(tarifaBase),
-              ),
-            if (peaje > 0)
-              _Row(
-                icon: Icons.toll_rounded,
-                iconColor: cs.outline,
-                label: 'Peaje incluido',
-                value: FormatosMoneda.rd(peaje),
-              ),
-            _Row(
-              icon: Icons.payments_rounded,
-              iconColor: cs.primary,
-              label: esCorporativo && esTaxista
-                  ? 'Tu neto acumulado (RD\$)'
-                  : 'Total del servicio (RD\$)',
-              value: montoPendienteServidor
-                  ? 'Confirmando…'
-                  : FormatosMoneda.rd(
-                      esCorporativo && esTaxista ? gananciaCond : total,
-                    ),
-              valueBold: true,
-            ),
-            if (esCorporativo && esTaxista && total > 1e-6)
-              _Row(
-                icon: Icons.receipt_long_outlined,
-                iconColor: cs.outline,
-                label: 'Tarifa ruta (empresa)',
-                value: FormatosMoneda.rd(total),
-              ),
-          ],
-        ),
-        if (mostrarLiquidacionTx) ...[
-          const SizedBox(height: 12),
-          _SectionCard(
-            title: 'Liquidación RAI (conductor)',
-            children: [
-              _Row(
-                icon: Icons.percent_rounded,
-                iconColor: cs.tertiary,
-                label: 'Comisión plataforma RAI',
-                value: FormatosMoneda.rd(comisionCond),
-              ),
-              _Row(
-                icon: Icons.savings_outlined,
-                iconColor: Colors.green.shade700,
-                label: 'Ingreso neto para el conductor',
-                value: FormatosMoneda.rd(gananciaCond),
-                valueBold: true,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                esCorporativo
-                    ? 'Ruta corporativa B2B: este neto se acumula en Ganancias → Corporativo. '
-                        'RAI cobra a la empresa y te transfiere al liquidar el período.'
-                    : esEfectivo
-                    ? 'Los montos reflejan el cierre en servidor. En efectivo, la comisión RAI '
-                        'impacta tu prepago y/o comisión pendiente; regularizá en Mis pagos.'
-                    : 'Los montos reflejan el cierre en servidor. En transferencia, cobrás el '
-                        'neto al pasajero y la comisión RAI se descuenta de tu prepago (recarga); '
-                        'si no alcanzó, queda como comisión pendiente. Regularizá en Mis pagos.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                      height: 1.35,
-                    ),
-              ),
-            ],
-          ),
-        ],
-        if (esEfectivo) ...[
-          const SizedBox(height: 12),
-          _SectionCard(
-            title: 'Instrucción de pago en efectivo',
-            children: [
-              _InfoBanner(
-                icon: Icons.attach_money_rounded,
-                color: Colors.green,
-                text: role == 'taxista'
-                    ? 'Cobrá ${FormatosMoneda.rd(total)} en efectivo al pasajero, conforme al servicio prestado.'
-                    : 'Entregá ${FormatosMoneda.rd(total)} en efectivo al conductor al concluir el traslado.',
-              ),
-            ],
-          ),
-        ],
-        if (esTransferencia && !esCorporativo) ...[
-          const SizedBox(height: 12),
-          if (usaRecaudoRai)
-            _FacturaSectionRecaudoRai(
-              viajeId: viajeId,
-              role: role,
-              data: data,
-              total: total,
-              transferenciaConfirmada: transferenciaConfirmada,
-              estadoPago: estadoPago,
-              comprobanteUrl: comprobanteUrl,
-              uidTaxista: uidTaxista,
-            )
-          else
-            _SectionTransferencia(
-              viajeId: viajeId,
-              role: role,
-              total: total,
-              montoPendienteServidor: montoPendienteServidor,
-              uidTaxista: uidTaxista,
-              snap: snapBancario,
-              comprobanteUrl: comprobanteUrl,
-              transferenciaConfirmada: transferenciaConfirmada,
-              estadoPago: estadoPago,
-              paymentStatus: paymentStatus,
-              motivoRechazo: motivoRechazo,
-            ),
-        ],
-        if (esTarjeta) ...[
-          const SizedBox(height: 12),
-          if (tarjetaPendienteCliente && !impagoCliente)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.orangeAccent.withValues(alpha: 0.45),
-                  ),
-                ),
-                child: const Text(
-                  'Pago pendiente: pagá con tarjeta o cambiá a efectivo. '
-                  'No podés pedir otro viaje hasta regularizar este cobro.',
-                  style: TextStyle(fontSize: 13, height: 1.35),
-                ),
-              ),
-            ),
-          if (impagoCliente)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.redAccent.withValues(alpha: 0.45),
-                  ),
-                ),
-                child: Text(
-                  'Deuda registrada con RAI por '
-                  '${FormatosMoneda.rd(MetodoPagoViaje.cobroClienteMontoRd(data))}. '
-                  'No podrás pedir viajes hasta pagar. Contactá soporte en la app si necesitás ayuda.',
-                  style: const TextStyle(fontSize: 13, height: 1.35),
-                ),
-              ),
-            ),
-          _SectionCard(
-            title: 'Pago con tarjeta',
-            children: [
-              RaiPagoTarjetaPanel(
-                viajeId: viajeId,
-                viajeData: data,
-                montoRd: total,
-                role: role,
-                modoViajeEnCurso: tarjetaPendienteCliente,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          RaiReciboTarjetaPanel(
-            recibo: ReciboTarjetaAzul.fromViaje(
-              viajeId: viajeId,
-              data: data,
-              montoRd: total,
-            ),
-            fondoOscuro: isDark,
-          ),
-        ],
-        if (esTaxista) ...[
-          const SizedBox(height: 12),
-          TaxistaRegistrarImpagoButton(
-            viajeId: viajeId,
-            metodoPagoFallback: metodoPago,
-          ),
-          _FacturaPanelComisionRecargaBloqueo(
-            uidTaxista: uidTaxista,
-            esEfectivo: esEfectivo,
-            esTransferencia: esTransferencia,
-            esCorporativo: esCorporativo,
-            comisionViaje: comisionCond,
-            gananciaViaje: gananciaCond,
-            lineaSaldoPrepagoFactura: _lineaSaldoPrepagoFactura(),
-          ),
-        ],
-        const SizedBox(height: 14),
-        _SectionCard(
-          title: 'Aviso legal breve',
-          muted: true,
-          children: [
-            Text(
-              'Documento informativo generado electrónicamente a partir de los datos registrados '
-              'en la plataforma RAI. Conservalo como respaldo ante consultas o conciliaciones. '
-              'El estado del pago por transferencia puede actualizarse cuando se valide el comprobante.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: cs.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-            ),
-          ],
-        ),
-      ],
-          ),
-        ),
-        SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-            child: bloqueaCierreCliente && !impagoCliente
-                ? OutlinedButton.icon(
-                    onPressed:
-                        _facturaCerrada ? null : () => _intentarCerrarFactura(),
-                    icon: const Icon(Icons.lock_outline_rounded),
-                    label: Text(etiquetaBotonCierre),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(52),
-                      foregroundColor:
-                          isDark ? Colors.white70 : cs.onSurfaceVariant,
-                      side: BorderSide(
-                        color: isDark
-                            ? Colors.white24
-                            : cs.outline.withValues(alpha: 0.5),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+              child: botonEstiloPendienteTarjeta
+                  ? OutlinedButton.icon(
+                      onPressed: botonContinuarActivo
+                          ? () => unawaited(_intentarCerrarFactura())
+                          : () => unawaited(_intentarCerrarFactura()),
+                      icon: _cerrandoFactura
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: isDark
+                                    ? Colors.white70
+                                    : cs.onSurfaceVariant,
+                              ),
+                            )
+                          : const Icon(Icons.lock_outline_rounded),
+                      label: Text(etiquetaBotonCierre),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(52),
+                        foregroundColor:
+                            isDark ? Colors.white70 : cs.onSurfaceVariant,
+                        side: BorderSide(
+                          color: isDark
+                              ? Colors.white24
+                              : cs.outline.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    )
+                  : FilledButton.icon(
+                      onPressed: botonContinuarActivo
+                          ? () => unawaited(_intentarCerrarFactura())
+                          : null,
+                      icon: _cerrandoFactura
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black54,
+                              ),
+                            )
+                          : const Icon(Icons.check_circle_outline_rounded),
+                      label: Text(etiquetaBotonCierre),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(52),
+                        backgroundColor:
+                            isDark ? RaiDriverColors.neon : cs.primary,
+                        foregroundColor: isDark ? Colors.black : cs.onPrimary,
                       ),
                     ),
-                  )
-                : FilledButton.icon(
-                    onPressed:
-                        _facturaCerrada ? null : () => _intentarCerrarFactura(),
-                    icon: const Icon(Icons.check_circle_outline_rounded),
-                    label: Text(etiquetaBotonCierre),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(52),
-                      backgroundColor: isDark ? RaiDriverColors.neon : cs.primary,
-                      foregroundColor: isDark ? Colors.black : cs.onPrimary,
-                    ),
-                  ),
+            ),
           ),
-        ),
-      ],
+        ],
       ),
     );
   }
@@ -1282,11 +1472,11 @@ class _FacturaPanelComisionRecargaBloqueo extends StatelessWidget {
                     'Ganancias → Corporativo. RAI cobra a la empresa y te transfiere '
                     'según el ciclo acordado — no pidas pago al pasajero.'
                 : esTransferencia
-                ? 'Este viaje se cobró por transferencia al pasajero (arriba: datos bancarios y comprobante). '
-                    'Al cerrar, la comisión RAI se descontó de tu prepago (arriba «Saldo prepago tras este cierre»). '
-                    'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.'
-                : 'Este viaje fue en efectivo: al cerrar, el servidor actualizó tu prepago (arriba «Saldo prepago tras este cierre»). '
-                    'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.';
+                    ? 'Este viaje se cobró por transferencia al pasajero (arriba: datos bancarios y comprobante). '
+                        'Al cerrar, la comisión RAI se descontó de tu prepago (arriba «Saldo prepago tras este cierre»). '
+                        'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.'
+                    : 'Este viaje fue en efectivo: al cerrar, el servidor actualizó tu prepago (arriba «Saldo prepago tras este cierre»). '
+                        'Para recargar: Mis pagos → cuenta RAI → monto → foto del bauche → revisión del administrador.';
 
             return _SectionCard(
               title: 'Comisión, recarga y bloqueo',
@@ -1455,8 +1645,7 @@ class _FacturaSectionRecaudoRai extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool pagado =
-        transferenciaConfirmada || estadoPago == 'verificado';
+    final bool pagado = transferenciaConfirmada || estadoPago == 'verificado';
     return _SectionCard(
       title: 'Pago a cuenta RAI (transferencia)',
       children: [
@@ -1567,9 +1756,7 @@ class _SectionTransferencia extends StatelessWidget {
               .toString()
               .trim(),
         );
-        if (live.banco.isEmpty &&
-            live.cuenta.isEmpty &&
-            live.titular.isEmpty) {
+        if (live.banco.isEmpty && live.cuenta.isEmpty && live.titular.isEmpty) {
           return const _SectionCard(
             title: 'Datos para transferencia al conductor',
             children: [
@@ -1776,9 +1963,8 @@ class _BotonSubirComprobanteState extends State<_BotonSubirComprobante> {
                 ),
               )
             : const Icon(Icons.upload_file_rounded),
-        label: Text(_subiendo
-            ? 'Subiendo comprobante…'
-            : 'Subir comprobante de pago'),
+        label: Text(
+            _subiendo ? 'Subiendo comprobante…' : 'Subir comprobante de pago'),
         style: FilledButton.styleFrom(
           minimumSize: const Size.fromHeight(52),
           backgroundColor: Colors.green,
@@ -1992,8 +2178,7 @@ class _Row extends StatelessWidget {
                   style: TextStyle(
                     color: cs.onSurface,
                     fontSize: valueBold ? 18 : 14,
-                    fontWeight:
-                        valueBold ? FontWeight.w800 : FontWeight.w500,
+                    fontWeight: valueBold ? FontWeight.w800 : FontWeight.w500,
                   ),
                 ),
               ],
@@ -2001,6 +2186,72 @@ class _Row extends StatelessWidget {
           ),
           if (trailing != null) trailing!,
         ],
+      ),
+    );
+  }
+}
+
+/// Comprobante: espera del registro con salida si Firestore tarda.
+class _FacturaEsperaRegistroPanel extends StatefulWidget {
+  const _FacturaEsperaRegistroPanel({required this.onContinuar});
+
+  final VoidCallback onContinuar;
+
+  @override
+  State<_FacturaEsperaRegistroPanel> createState() =>
+      _FacturaEsperaRegistroPanelState();
+}
+
+class _FacturaEsperaRegistroPanelState
+    extends State<_FacturaEsperaRegistroPanel> {
+  static const Duration _kTimeout = Duration(seconds: 8);
+  Timer? _timer;
+  bool _mostrarEscape = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(_kTimeout, () {
+      if (!mounted) return;
+      setState(() => _mostrarEscape = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text(
+              _mostrarEscape
+                  ? 'No pudimos cargar el comprobante ahora. '
+                      'Tu viaje ya está cerrado; podés continuar.'
+                  : 'Cargando comprobante…',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: muted, height: 1.35),
+            ),
+            if (_mostrarEscape) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: widget.onContinuar,
+                icon: const Icon(Icons.arrow_forward_rounded),
+                label: const Text('Continuar'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

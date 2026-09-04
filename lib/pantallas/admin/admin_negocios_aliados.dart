@@ -56,6 +56,11 @@ class _AdminNegociosAliadosState extends State<AdminNegociosAliados> {
       _snack('Escribe el nombre del negocio.');
       return;
     }
+    final ciudad = _ciudadCtrl.text.trim();
+    if (ciudad.isEmpty) {
+      _snack('Indica el pueblo/ciudad del negocio (necesario para la promo 6.º gratis).');
+      return;
+    }
     if (_guardando) return;
 
     setState(() => _guardando = true);
@@ -63,7 +68,7 @@ class _AdminNegociosAliadosState extends State<AdminNegociosAliados> {
     try {
       creado = await NegociosAliadosRepo.crear(
         nombre: nombre,
-        ciudad: _ciudadCtrl.text.trim(),
+        ciudad: ciudad,
         telefonoContacto: _telCtrl.text.trim(),
         notas: _notasCtrl.text.trim(),
         codigoPreferido: _codigoCtrl.text.trim().isEmpty

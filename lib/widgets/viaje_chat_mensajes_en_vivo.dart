@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/servicios/chat_repo.dart';
-import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/chat_viaje_nav.dart';
 
 /// Panel compacto estilo inDrive: resalta cuando el otro escribe y abre el chat al tocar.
 /// Sin ListView anidado (no roba gestos al [SingleChildScrollView] del viaje en curso).
@@ -35,33 +36,53 @@ class _ViajeChatMensajesEnVivoState extends State<ViajeChatMensajesEnVivo> {
   /// Evita repetir vibración si el mismo snapshot se reconstruye.
   String? _ultimoDocIdConHaptico;
   bool _chatListo = false;
+  bool _streamDemorado = false;
+  Timer? _streamEsperaTimer;
 
   @override
   void initState() {
     super.initState();
     _prepararChat();
+    _streamEsperaTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      setState(() => _streamDemorado = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _streamEsperaTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _prepararChat() async {
     try {
-      await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
+      await ChatRepo.resolveOrCreateChatId(
+        uidA: widget.miUid,
+        uidB: widget.otroUid,
+        viajeId: widget.viajeId,
+      ).timeout(const Duration(seconds: 8));
     } catch (_) {
       // El stream puede seguir funcionando si el doc ya existía.
     }
     if (mounted) setState(() => _chatListo = true);
   }
 
+  void _cancelarEsperaStream() {
+    if (_streamDemorado) return;
+    _streamEsperaTimer?.cancel();
+    _streamEsperaTimer = null;
+    if (mounted) setState(() => _streamDemorado = false);
+  }
+
   void _abrirChat(BuildContext context) {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => ChatScreen(
-          otroUid: widget.otroUid,
-          otroNombre: widget.otroNombre,
-          viajeId: widget.viajeId,
-        ),
-      ),
-    );
+    unawaited(ChatViajeNav.abrir(
+      context: context,
+      miUid: widget.miUid,
+      otroUid: widget.otroUid,
+      otroNombre: widget.otroNombre,
+      viajeId: widget.viajeId,
+    ));
   }
 
   void _evaluarNuevoDelOtro({
@@ -96,12 +117,17 @@ class _ViajeChatMensajesEnVivoState extends State<ViajeChatMensajesEnVivo> {
         ),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
+            if (_streamDemorado) {
+              return _cajaVacia(cs, context);
+            }
             return _cajaEsqueleto(cs);
           }
           if (snap.hasError) {
+            _cancelarEsperaStream();
             return _cajaError(cs);
           }
 
+          _cancelarEsperaStream();
           final docs = snap.data?.docs ?? const [];
           if (docs.isEmpty) {
             return _cajaVacia(cs, context);

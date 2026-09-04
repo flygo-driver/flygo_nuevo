@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../servicios/lugares_service.dart';
+import '../servicios/lugares_populares_service.dart';
 import '../servicios/rai_speech_busqueda_direccion.dart';
 import '../utils/rai_aplicar_destino_desde_voz.dart';
 import 'rai_direccion_inteligente_sheet.dart';
+import 'buscar_lugar_mapa_page.dart';
 
 class CampoLugarAutocomplete extends StatefulWidget {
   final String label;
@@ -38,6 +41,18 @@ class CampoLugarAutocomplete extends StatefulWidget {
   /// Botón RAI: búsqueda inteligente (IA + Places) para destinos difíciles.
   final bool asistenteDireccionHabilitado;
 
+  /// Abre buscador con mapa + lista dentro de un panel (no sale de RAI).
+  final bool modoPantallaMapa;
+
+  /// La pantalla padre ya tiene mapa: no abrir buscador mapa aparte.
+  final bool mapaIntegradoEnPantalla;
+
+  /// Al enfocar el campo (p. ej. marcar qué punto se elige en el mapa de fondo).
+  final VoidCallback? onCampoEnfocado;
+
+  /// Para aprendizaje FlyGo: origen vs destino en lugares populares.
+  final bool esCampoOrigen;
+
   const CampoLugarAutocomplete({
     super.key,
     required this.label,
@@ -58,6 +73,10 @@ class CampoLugarAutocomplete extends StatefulWidget {
     this.fieldHintColor,
     this.fieldLabelColor,
     this.asistenteDireccionHabilitado = true,
+    this.modoPantallaMapa = false,
+    this.mapaIntegradoEnPantalla = false,
+    this.onCampoEnfocado,
+    this.esCampoOrigen = false,
   });
 
   @override
@@ -70,10 +89,8 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   final _focus = FocusNode();
   final _svc = LugaresService.instance;
 
-  final LayerLink _layerLink = LayerLink();
   final GlobalKey _fieldKey = GlobalKey();
 
-  OverlayEntry? _entry;
   List<PrediccionLugar> _sugs = const [];
   Timer? _debounce;
   Timer? _unfocusClearTimer;
@@ -82,10 +99,11 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   bool _seleccionEnCurso = false;
   /// Scroll/toques en el panel de sugerencias (no cerrar al perder foco del TextField).
   bool _overlayInteracting = false;
-  /// Campo + lista de sugerencias: mismo grupo para no cerrar al tocar una opción.
-  final Object _tapRegionGroup = Object();
-  /// En móvil el teclado quita el foco al tocar un chip; sin esto desaparecen antes del tap.
   bool _mostrarRecientes = false;
+
+  bool get _panelVisible =>
+      _sugs.isNotEmpty &&
+      (_focus.hasFocus || _overlayInteracting || _seleccionEnCurso);
 
   // Evita que una respuesta anterior (petición atrasada) sobrescriba
   // el estado actual cuando el usuario escribe rápido.
@@ -112,12 +130,23 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       if (_focus.hasFocus) {
         _unfocusClearTimer?.cancel();
         _mostrarRecientes = true;
-        if (_sugs.isNotEmpty) _showOverlay();
+        _scrollCampoVisible();
+        widget.onCampoEnfocado?.call();
         return;
       }
-      // No cerrar recientes ni overlay al perder foco: en móvil el tap en chip
-      // quita el foco del TextField antes de registrar el gesto.
       _unfocusClearTimer?.cancel();
+      _unfocusClearTimer = Timer(const Duration(milliseconds: 220), () {
+        if (!mounted ||
+            _focus.hasFocus ||
+            _overlayInteracting ||
+            _seleccionEnCurso) {
+          return;
+        }
+        setState(() {
+          _mostrarRecientes = false;
+          _sugs = const [];
+        });
+      });
     });
 
     _cargarRecientes();
@@ -125,9 +154,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
   @override
   void didChangeMetrics() {
-    if (!mounted) return;
-    setState(() {});
-    if (_entry != null) _refreshOverlay();
+    if (mounted) setState(() {});
   }
 
   void _onVozListeningChanged(bool active) {
@@ -205,11 +232,6 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
             .toList(growable: false);
       });
       _focus.requestFocus();
-      if (_entry == null) {
-        _showOverlay();
-      } else {
-        _refreshOverlay();
-      }
       return;
     }
 
@@ -292,200 +314,38 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     _debounce?.cancel();
     _unfocusClearTimer?.cancel();
     if (_voz.isListening) unawaited(_voz.stop());
-    _removeOverlay();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
   }
 
-  void _removeOverlay() {
-    _entry?.remove();
-    _entry = null;
+  void _scrollCampoVisible() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_focus.hasFocus) return;
+      final ctx = _fieldKey.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.02,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  double _alturaMaxPanelSugerencias(double kbInset) {
+    final mq = MediaQuery.of(context);
+    final visible =
+        mq.size.height - kbInset - mq.padding.top - mq.padding.bottom - 96;
+    return visible.clamp(200.0, 460.0);
   }
 
   void _clearSugsAndOverlay() {
-    if (mounted) setState(() => _sugs = const []);
-    _removeOverlay();
-  }
-
-  void _showOverlay() {
     if (!mounted) return;
-    _removeOverlay();
-
-    final overlay = Overlay.of(context, rootOverlay: true);
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final scheme = theme.colorScheme;
-    final overlayBg = isDark ? const Color(0xFF121212) : scheme.surface;
-    final overlayBorder =
-        isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.35);
-    final dividerColor =
-        isDark ? Colors.white12 : scheme.outline.withValues(alpha: 0.2);
-    final titleStyle = TextStyle(
-      color: isDark ? Colors.white : scheme.onSurface,
-      fontWeight: FontWeight.w600,
-      fontSize: 15,
-    );
-    final subtitleStyle = TextStyle(
-      color: isDark ? Colors.white54 : scheme.onSurface.withValues(alpha: 0.62),
-      fontSize: 12,
-    );
-    final placeIconColor =
-        isDark ? Colors.greenAccent : const Color(0xFF059669);
-
-    _entry = OverlayEntry(
-      builder: (overlayCtx) {
-        final box = _fieldKey.currentContext?.findRenderObject() as RenderBox?;
-        final fieldSize = box?.size ?? const Size(300, 56);
-        final mq = MediaQuery.of(overlayCtx);
-        final kb = mq.viewInsets.bottom;
-        double spaceBelow = 400;
-        double spaceAbove = 200;
-        if (box != null && box.hasSize) {
-          final topLeft = box.localToGlobal(Offset.zero);
-          final screenH = mq.size.height;
-          spaceBelow = screenH - kb - (topLeft.dy + fieldSize.height) - 12;
-          spaceAbove = topLeft.dy - mq.padding.top - 8;
-        }
-        const minComfort = 168.0;
-        final openUpward = spaceBelow < minComfort &&
-            spaceAbove >= 120 &&
-            spaceAbove >= spaceBelow - 40;
-        final maxListH =
-            (openUpward ? spaceAbove : spaceBelow).clamp(140.0, 340.0);
-
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // Barrera DETRÁS de la lista: cierra al tocar fuera, pero no
-            // intercepta scroll/tap de las opciones (van encima en el Stack).
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  if (_seleccionEnCurso || _overlayInteracting) return;
-                  _focus.unfocus();
-                  _clearSugsAndOverlay();
-                },
-              ),
-            ),
-            CompositedTransformFollower(
-              link: _layerLink,
-              showWhenUnlinked: false,
-              targetAnchor:
-                  openUpward ? Alignment.topLeft : Alignment.bottomLeft,
-              followerAnchor:
-                  openUpward ? Alignment.bottomLeft : Alignment.topLeft,
-              offset: Offset(0, openUpward ? -8 : 8),
-              child: TapRegion(
-                groupId: _tapRegionGroup,
-                child: Material(
-                  color: Colors.transparent,
-                  elevation: 8,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Listener(
-                    behavior: HitTestBehavior.opaque,
-                    onPointerDown: (_) {
-                      _overlayInteracting = true;
-                      _unfocusClearTimer?.cancel();
-                    },
-                    onPointerUp: (_) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        _overlayInteracting = false;
-                      });
-                    },
-                    onPointerCancel: (_) {
-                      _overlayInteracting = false;
-                    },
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: fieldSize.width,
-                        maxHeight: maxListH,
-                      ),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: overlayBg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: overlayBorder),
-                          boxShadow: [
-                            BoxShadow(
-                              color: isDark
-                                  ? Colors.black54
-                                  : Colors.black.withValues(alpha: 0.12),
-                              blurRadius: 18,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
-                        ),
-                        child: NotificationListener<ScrollNotification>(
-                          onNotification: (_) => true,
-                          child: Scrollbar(
-                            thumbVisibility: _sugs.length > 5,
-                            child: ListView.separated(
-                              padding: EdgeInsets.zero,
-                              shrinkWrap: true,
-                              primary: false,
-                              physics: const ClampingScrollPhysics(),
-                              itemCount: _sugs.length,
-                              separatorBuilder: (_, __) =>
-                                  Divider(height: 1, color: dividerColor),
-                              itemBuilder: (_, i) {
-                                final p = _sugs[i];
-                                final esReciente = _esPrediccionReciente(p);
-                                final esRai =
-                                    p.placeId == '__rai_inteligente__';
-                                final subtitle = esRai
-                                    ? (p.secondary ?? '').trim()
-                                    : esReciente
-                                        ? null
-                                        : (p.secondary ?? '').trim();
-                                return Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    onTap: () =>
-                                        _manejarSeleccionSugerencia(p),
-                                    child: ListTile(
-                                      dense: true,
-                                      mouseCursor: SystemMouseCursors.click,
-                                      leading: Icon(
-                                        esRai
-                                            ? Icons.auto_awesome_rounded
-                                            : esReciente
-                                                ? Icons.history
-                                                : Icons.place,
-                                        color: esReciente
-                                            ? (isDark
-                                                ? Colors.amber.shade200
-                                                : Colors.amber.shade800)
-                                            : placeIconColor,
-                                        size: 20,
-                                      ),
-                                      title:
-                                          Text(p.primary, style: titleStyle),
-                                      subtitle: subtitle != null &&
-                                              subtitle.isNotEmpty
-                                          ? Text(subtitle,
-                                              style: subtitleStyle)
-                                          : null,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-
-    overlay.insert(_entry!);
+    setState(() {
+      _sugs = const [];
+      _mostrarRecientes = false;
+    });
   }
 
   void _manejarSeleccionSugerencia(PrediccionLugar p) {
@@ -501,15 +361,9 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       unawaited(abrirBusquedaInteligenteRai());
       return;
     }
-    // Reciente y Places: mismo flujo (detalle → texto → onPlaceSelected → cotización).
     unawaited(_selectPrediction(p).whenComplete(() {
       _seleccionEnCurso = false;
     }));
-  }
-
-  void _refreshOverlay() {
-    if (_entry == null) return;
-    _entry!.markNeedsBuild();
   }
 
   String _norm(String s) {
@@ -547,7 +401,6 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
   void _onChanged(String text) {
     if (_applyingResolvedPlace) {
       _debounce?.cancel();
-      _removeOverlay();
       if (mounted) {
         setState(() {
           _sugs = const [];
@@ -560,17 +413,9 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     widget.onTextChanged?.call(text);
 
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 110), () async {
+    _debounce = Timer(const Duration(milliseconds: 120), () async {
       final q = text.trim();
-      if (!_focus.hasFocus) {
-        // Mantener recientes/sugerencias visibles aunque el teclado quite el foco;
-        // el usuario está eligiendo en el overlay.
-        if (_entry != null || _sugs.isNotEmpty) {
-          // seguir con la búsqueda/redibujo abajo
-        } else {
-          return;
-        }
-      }
+      if (!_focus.hasFocus && _sugs.isEmpty) return;
 
       if (q.isEmpty) {
         final soloRecientes = _recientesComoPredicciones('');
@@ -583,7 +428,7 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           _loading = false;
           _sugs = soloRecientes;
         });
-        _ensureOverlayVisible();
+        _scrollCampoVisible();
         return;
       }
 
@@ -598,19 +443,36 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
           _loading = false;
           _sugs = parcial;
         });
-        _ensureOverlayVisible();
+        _scrollCampoVisible();
         return;
       }
 
       final int seq = ++_autocompleteSeq;
-      if (mounted) setState(() => _loading = true);
+      if (mounted) {
+        setState(() => _loading = _sugs.isEmpty);
+      }
 
-      final remotas = await _svc.autocompletar(
-        q,
-        biasLat: widget.biasLat,
-        biasLon: widget.biasLon,
-        country: widget.country ?? 'DO',
-      );
+      List<PrediccionLugar> remotas = const [];
+      try {
+        remotas = await _svc.autocompletar(
+          q,
+          biasLat: widget.biasLat,
+          biasLon: widget.biasLon,
+          country: widget.country ?? 'DO',
+          modoMapa: !kIsWeb,
+          onParcial: (parcial) {
+            if (!mounted || seq != _autocompleteSeq) return;
+            if (_controller.text.trim() != q) return;
+            setState(() {
+              _loading = false;
+              _sugs = parcial;
+            });
+            _scrollCampoVisible();
+          },
+        );
+      } catch (_) {
+        remotas = const [];
+      }
 
       if (!mounted) return;
       if (seq != _autocompleteSeq) return;
@@ -629,44 +491,30 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
 
       setState(() {
         _loading = false;
-        _sugs = _svc.rankearPredicciones(merged, q);
+        _sugs = _svc.rankearPredicciones(
+          merged,
+          q,
+          priorizarGoogle: !kIsWeb,
+        );
       });
+      _scrollCampoVisible();
 
-      if (_sugs.isEmpty) {
-        _removeOverlay();
-        if (widget.asistenteDireccionHabilitado &&
-            q.length >= 3 &&
-            remotas.isEmpty) {
-          if (mounted) {
-            setState(() {
-              _sugs = [
-                const PrediccionLugar(
-                  placeId: '__rai_inteligente__',
-                  primary: 'Buscar con RAI (IA + Google)',
-                  secondary: 'Para direcciones difíciles',
-                ),
-              ];
-            });
-            _showOverlay();
-          }
-        }
-      } else {
-        _ensureOverlayVisible();
+      if (_sugs.isEmpty &&
+          widget.asistenteDireccionHabilitado &&
+          q.length >= 3 &&
+          remotas.isEmpty &&
+          mounted) {
+        setState(() {
+          _sugs = [
+            const PrediccionLugar(
+              placeId: '__rai_inteligente__',
+              primary: 'Buscar con RAI (IA + Google)',
+              secondary: 'Para direcciones difíciles',
+            ),
+          ];
+        });
       }
     });
-  }
-
-  /// Mantiene o abre el panel aunque el teclado quite el foco
-  /// (típico al tocar/scroll las opciones).
-  void _ensureOverlayVisible() {
-    if (!mounted || _sugs.isEmpty) return;
-    if (_entry != null) {
-      _refreshOverlay();
-      return;
-    }
-    if (_focus.hasFocus || _overlayInteracting || _seleccionEnCurso) {
-      _showOverlay();
-    }
   }
 
   Future<void> aplicarDetalleExterno(DetalleLugar det) async {
@@ -679,6 +527,32 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       textoInicial: _controller.text.trim(),
       biasLat: widget.biasLat,
       biasLon: widget.biasLon,
+      mostrarBotonMapa: !widget.mapaIntegradoEnPantalla,
+    );
+    if (det != null && mounted) {
+      await _finalizePlaceSelection(det);
+    }
+  }
+
+  Future<void> _abrirPantallaMapa() async {
+    if (widget.mapaIntegradoEnPantalla) {
+      widget.onCampoEnfocado?.call();
+      if (!_focus.hasFocus) _focus.requestFocus();
+      return;
+    }
+    _focus.unfocus();
+    _clearSugsAndOverlay();
+    final det = await BuscarLugarMapaPage.mostrar(
+      context,
+      titulo: widget.label,
+      hint: widget.hint,
+      textoInicial: _controller.text.trim(),
+      country: widget.country ?? 'DO',
+      biasLat: widget.biasLat,
+      biasLon: widget.biasLon,
+      accentColor: widget.fieldAccent,
+      esCampoOrigen: widget.esCampoOrigen,
+      enSheet: true,
     );
     if (det != null && mounted) {
       await _finalizePlaceSelection(det);
@@ -699,6 +573,12 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
       // y cancela la cotización (viajes normales / motor).
       widget.onPlaceSelected(det);
       await _guardarReciente(det);
+      unawaited(
+        LugaresPopularesService.instance.registrarSeleccion(
+          det: det,
+          esOrigen: widget.esCampoOrigen,
+        ),
+      );
     } finally {
       _applyingResolvedPlace = false;
       _seleccionEnCurso = false;
@@ -759,7 +639,6 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
     await _voz.stop();
     if (mounted) setState(() => _escuchando = false);
     if (mounted) setState(() => _loading = true);
-    _removeOverlay();
 
     if (_esPrediccionReciente(p)) {
       _pegarTextoEnCampo(p.primary);
@@ -888,134 +767,270 @@ class CampoLugarAutocompleteState extends State<CampoLugarAutocomplete>
         fondoOscuro ? Colors.white54 : const Color(0xFF667085);
 
     final kbInset = MediaQuery.of(context).viewInsets.bottom;
+    final kbAbierto = kbInset > 48;
+    final panelSugerencias =
+        _panelVisible ? _buildPanelSugerencias(kbInset) : null;
 
-    return TapRegion(
-        groupId: _tapRegionGroup,
-        onTapOutside: (_) {
-          if (_seleccionEnCurso || _overlayInteracting) return;
-          if (!_focus.hasFocus && _entry == null && !_mostrarRecientes) return;
-          _mostrarRecientes = false;
-          _focus.unfocus();
-          _clearSugsAndOverlay();
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CompositedTransformTarget(
-              link: _layerLink,
-              child: TextFormField(
-              key: _fieldKey,
-              controller: _controller,
-              focusNode: _focus,
-              style: TextStyle(color: textoCampo, fontSize: 16),
-              cursorColor: accent,
-              scrollPadding: const EdgeInsets.fromLTRB(0, 0, 0, 320),
-              decoration: InputDecoration(
-                labelText: widget.label,
-                hintText: widget.hint ?? 'Ej: Santo Domingo, Punta Cana...',
-                labelStyle: TextStyle(color: etiquetaCampo),
-                floatingLabelStyle: TextStyle(color: etiquetaCampo),
-                hintStyle: TextStyle(color: hintCampo),
-                filled: true,
-                fillColor: fillColor,
-                prefixIcon: widget.prefixIcon ??
-                    Icon(Icons.search_rounded, color: accent),
-                suffixIcon: _loading
-                    ? Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: accent,
-                          ),
-                        ),
-                      )
-                    : Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (widget.asistenteDireccionHabilitado)
-                            IconButton(
-                              tooltip: _escuchando
-                                  ? 'Detener dictado'
-                                  : 'Dictar destino',
-                              icon: Icon(
-                                _escuchando
-                                    ? Icons.mic_rounded
-                                    : Icons.mic_none_rounded,
-                                color: _escuchando
-                                    ? Colors.redAccent
-                                    : accent,
-                                size: 22,
-                              ),
-                              onPressed: _toggleVoz,
-                            ),
-                          if (widget.asistenteDireccionHabilitado)
-                            IconButton(
-                              tooltip: 'Búsqueda inteligente RAI',
-                              icon: Icon(
-                                Icons.auto_awesome_rounded,
-                                color: accent,
-                                size: 22,
-                              ),
-                              onPressed: abrirBusquedaInteligenteRai,
-                            ),
-                          if (_controller.text.isNotEmpty)
-                            IconButton(
-                              icon: Icon(
-                                Icons.clear_rounded,
-                                color: iconoLimpiar,
-                              ),
-                              onPressed: () {
-                                _controller.clear();
-                                _mostrarRecientes = true;
-                                widget.onTextChanged?.call('');
-                                _clearSugsAndOverlay();
-                              },
-                            ),
-                        ],
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!widget.modoPantallaMapa && kbAbierto && panelSugerencias != null)
+          panelSugerencias,
+        TextFormField(
+          key: _fieldKey,
+          controller: _controller,
+          focusNode: _focus,
+          readOnly: widget.modoPantallaMapa,
+          style: TextStyle(color: textoCampo, fontSize: 16),
+          cursorColor: accent,
+          scrollPadding: EdgeInsets.fromLTRB(
+            0,
+            0,
+            0,
+            widget.mapaIntegradoEnPantalla
+                ? (kbAbierto ? kbInset + 32 : 140)
+                : (kbAbierto ? 24 : 360),
+          ),
+          decoration: InputDecoration(
+            labelText: widget.label,
+            hintText: widget.hint ?? 'Ej: Santo Domingo, Punta Cana...',
+            labelStyle: TextStyle(color: etiquetaCampo),
+            floatingLabelStyle: TextStyle(color: etiquetaCampo),
+            hintStyle: TextStyle(color: hintCampo),
+            filled: true,
+            fillColor: fillColor,
+            prefixIcon:
+                widget.prefixIcon ?? Icon(Icons.search_rounded, color: accent),
+            suffixIcon: _loading && _sugs.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: accent,
                       ),
-                border: border,
-                enabledBorder: border,
-                focusedBorder: border.copyWith(
-                  borderSide: BorderSide(color: accent, width: 2),
-                ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-              ).applyDefaults(theme.inputDecorationTheme),
-              onChanged: _onChanged,
-              onTap: () {
-                if (!_focus.hasFocus) return;
-                if (_sugs.isNotEmpty) {
-                  _showOverlay();
-                  return;
-                }
-                final rec = _recientesComoPredicciones(_controller.text.trim());
-                if (rec.isNotEmpty) {
-                  setState(() => _sugs = rec);
-                  _showOverlay();
-                }
+                    ),
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!widget.modoPantallaMapa &&
+                          !widget.mapaIntegradoEnPantalla)
+                        IconButton(
+                          tooltip: 'Elegir en el mapa',
+                          icon: Icon(
+                            Icons.map_rounded,
+                            color: accent,
+                            size: 22,
+                          ),
+                          onPressed: () => unawaited(_abrirPantallaMapa()),
+                        ),
+                      if (widget.asistenteDireccionHabilitado)
+                        IconButton(
+                          tooltip:
+                              _escuchando ? 'Detener dictado' : 'Dictar destino',
+                          icon: Icon(
+                            _escuchando
+                                ? Icons.mic_rounded
+                                : Icons.mic_none_rounded,
+                            color:
+                                _escuchando ? Colors.redAccent : accent,
+                            size: 22,
+                          ),
+                          onPressed: _toggleVoz,
+                        ),
+                      if (widget.asistenteDireccionHabilitado)
+                        IconButton(
+                          tooltip: 'Búsqueda inteligente RAI',
+                          icon: Icon(
+                            Icons.smart_toy_rounded,
+                            color: accent,
+                            size: 22,
+                          ),
+                          onPressed: abrirBusquedaInteligenteRai,
+                        ),
+                      if (_controller.text.isNotEmpty)
+                        IconButton(
+                          icon: Icon(
+                            Icons.clear_rounded,
+                            color: iconoLimpiar,
+                          ),
+                          onPressed: () {
+                            _controller.clear();
+                            _mostrarRecientes = true;
+                            widget.onTextChanged?.call('');
+                            _clearSugsAndOverlay();
+                          },
+                        ),
+                    ],
+                  ),
+            border: border,
+            enabledBorder: border,
+            focusedBorder: border.copyWith(
+              borderSide: BorderSide(color: accent, width: 2),
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          ).applyDefaults(theme.inputDecorationTheme),
+          onChanged: widget.modoPantallaMapa ? null : _onChanged,
+          onTap: () {
+            if (widget.modoPantallaMapa) {
+              if (widget.mapaIntegradoEnPantalla) {
+                widget.onCampoEnfocado?.call();
+                if (!_focus.hasFocus) _focus.requestFocus();
+              } else {
+                unawaited(_abrirPantallaMapa());
+              }
+              return;
+            }
+            widget.onCampoEnfocado?.call();
+            if (!_focus.hasFocus) _focus.requestFocus();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted || !_focus.hasFocus) return;
+              if (_sugs.isNotEmpty) {
+                setState(() => _mostrarRecientes = true);
+                return;
+              }
+              final rec = _recientesComoPredicciones(_controller.text.trim());
+              if (rec.isNotEmpty) {
+                setState(() {
+                  _sugs = rec;
+                  _mostrarRecientes = true;
+                });
+              }
+            });
+          },
+        ),
+        if (!widget.modoPantallaMapa && !kbAbierto && panelSugerencias != null)
+          panelSugerencias,
+        if (_recientes.isNotEmpty &&
+            _controller.text.isEmpty &&
+            !_panelVisible &&
+            (_mostrarRecientes ||
+                _seleccionEnCurso ||
+                _overlayInteracting))
+          _buildRecientesSection(),
+      ],
+    );
+  }
+
+  Widget _buildPanelSugerencias(double kbInset) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final scheme = theme.colorScheme;
+    final panelBg = isDark ? const Color(0xFF121212) : scheme.surface;
+    final panelBorder =
+        isDark ? Colors.white24 : scheme.outline.withValues(alpha: 0.35);
+    final dividerColor =
+        isDark ? Colors.white12 : scheme.outline.withValues(alpha: 0.2);
+    final titleStyle = TextStyle(
+      color: isDark ? Colors.white : scheme.onSurface,
+      fontWeight: FontWeight.w600,
+      fontSize: 15,
+    );
+    final subtitleStyle = TextStyle(
+      color: isDark ? Colors.white54 : scheme.onSurface.withValues(alpha: 0.62),
+      fontSize: 12,
+    );
+    final placeIconColor =
+        isDark ? Colors.greenAccent : const Color(0xFF059669);
+    final maxH = _alturaMaxPanelSugerencias(kbInset);
+
+    return Padding(
+      padding: EdgeInsets.only(top: kbInset > 48 ? 0 : 8, bottom: kbInset > 48 ? 8 : 0),
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (_) {
+          _overlayInteracting = true;
+          _unfocusClearTimer?.cancel();
+        },
+        onPointerUp: (_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _overlayInteracting = false;
+          });
+        },
+        onPointerCancel: (_) => _overlayInteracting = false,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.transparent,
+          child: Container(
+            constraints: BoxConstraints(maxHeight: maxH),
+            decoration: BoxDecoration(
+              color: panelBg,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: panelBorder),
+            ),
+            child: ListView.separated(
+              padding: EdgeInsets.zero,
+              shrinkWrap: true,
+              primary: false,
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
+              ),
+              itemCount: _sugs.length,
+              separatorBuilder: (_, __) =>
+                  Divider(height: 1, color: dividerColor),
+              itemBuilder: (_, i) {
+                final p = _sugs[i];
+                final esReciente = _esPrediccionReciente(p);
+                final esRai = p.placeId == '__rai_inteligente__';
+                                final esCatalogoRd = p.placeId.startsWith('local:poi:');
+                                final esFlygoPopular =
+                                    p.placeId.startsWith('flygo_popular:') ||
+                                    (p.secondary ?? '')
+                                        .toLowerCase()
+                                        .contains('frecuente en flygo');
+                                final subtitle = esRai
+                    ? (p.secondary ?? '').trim()
+                                    : esReciente
+                                        ? null
+                                        : esFlygoPopular
+                                            ? ((p.secondary ?? '').trim().isNotEmpty
+                                                ? p.secondary!.trim()
+                                                : 'Frecuente en FlyGo')
+                                            : esCatalogoRd
+                            ? () {
+                                final sec = (p.secondary ?? '').trim();
+                                return sec.isNotEmpty
+                                    ? 'Catálogo RAI · $sec'
+                                    : 'Catálogo RAI';
+                              }()
+                            : (p.secondary ?? '').trim();
+                return ListTile(
+                  dense: true,
+                  onTap: () => _manejarSeleccionSugerencia(p),
+                  leading: Icon(
+                    esRai
+                        ? Icons.auto_awesome_rounded
+                        : esReciente
+                            ? Icons.history
+                            : esCatalogoRd
+                                ? Icons.map_rounded
+                                : esFlygoPopular
+                                    ? Icons.trending_up_rounded
+                                    : Icons.place,
+                    color: esReciente
+                        ? (isDark
+                            ? Colors.amber.shade200
+                            : Colors.amber.shade800)
+                        : placeIconColor,
+                    size: 20,
+                  ),
+                  title: Text(p.primary, style: titleStyle),
+                  subtitle: subtitle != null && subtitle.isNotEmpty
+                      ? Text(subtitle, style: subtitleStyle)
+                      : null,
+                );
               },
             ),
-            ),
-            const SizedBox(height: 8),
-            // Chips dentro del mismo TapRegion: en móvil el tap no pierde
-            // el foco antes de registrar la selección (antes eran "outside").
-            if (_recientes.isNotEmpty &&
-                _controller.text.isEmpty &&
-                _entry == null &&
-                (_mostrarRecientes ||
-                    _seleccionEnCurso ||
-                    _overlayInteracting))
-              _buildRecientesSection(),
-            // Espaciador bajo los chips (no envolver todo el Column): en móvil
-            // el padding del teclado movía los chips y el tap fallaba al cerrarse.
-            if (kbInset > 0) SizedBox(height: kbInset),
-          ],
+          ),
         ),
-      );
+      ),
+    );
   }
 
   // Lugares recientes (única sección visible junto al autocomplete).

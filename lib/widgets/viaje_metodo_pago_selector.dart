@@ -1,8 +1,40 @@
 import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/cliente_metodo_pago_viaje_ui.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
 import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
+
+/// Etiqueta corta para tiles estrechos o texto grande (Apariencia).
+String _etiquetaMetodoPagoTile(
+  BuildContext context,
+  _MetodoPagoOpcion opcion,
+  double anchoTile,
+) {
+  final double escala = MediaQuery.textScalerOf(context).scale(1.0);
+  final bool apretado = anchoTile < 96 || escala >= 1.08;
+  if (!apretado) return opcion.label;
+  switch (opcion.value) {
+    case 'transferencia':
+      return 'Transf.';
+    case 'efectivo':
+      return 'Efectivo';
+    case 'tarjeta':
+      return 'Tarjeta';
+    default:
+      return opcion.label;
+  }
+}
+
+/// Mensaje legible: las callables llegan como `[plugin/codigo] motivo`.
+String _motivo(Object e) {
+  final String s = e.toString().trim();
+  final int cierre = s.indexOf('] ');
+  if (cierre > 0 && cierre + 2 < s.length) {
+    return s.substring(cierre + 2).trim();
+  }
+  return s;
+}
 
 /// Selector de método de pago durante el viaje (cliente).
 class ViajeMetodoPagoSelector extends StatefulWidget {
@@ -11,11 +43,13 @@ class ViajeMetodoPagoSelector extends StatefulWidget {
     required this.viajeId,
     required this.metodoPagoActual,
     this.fondoOscuro = false,
+    this.onMetodoSeleccionado,
   });
 
   final String viajeId;
   final String metodoPagoActual;
   final bool fondoOscuro;
+  final ValueChanged<String>? onMetodoSeleccionado;
 
   @override
   State<ViajeMetodoPagoSelector> createState() =>
@@ -25,26 +59,59 @@ class ViajeMetodoPagoSelector extends StatefulWidget {
 class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
   String? _actualizando;
 
+  String get _metodoMostrado => MetodoPagoViaje.asientoCategoria(
+        ClienteMetodoPagoViajeUi.resolver(
+          viajeId: widget.viajeId,
+          metodoRemoto: widget.metodoPagoActual,
+        ),
+      );
+
   Future<void> _elegir(String metodo) async {
     if (_actualizando != null) return;
-    if (metodo == 'tarjeta' && !PagoTarjetaClienteGate.cobroHabilitado) {
-      await PagoTarjetaClienteGate.permitirAccionTarjeta(context);
-      return;
-    }
-    final String actual =
-        MetodoPagoViaje.asientoCategoria(widget.metodoPagoActual);
+    final String actual = _metodoMostrado;
     if (actual == metodo) return;
 
+    final bool tarjetaSinCobro =
+        metodo == 'tarjeta' && !PagoTarjetaClienteGate.cobroHabilitado;
+
+    ClienteMetodoPagoViajeUi.marcar(
+      viajeId: widget.viajeId,
+      categoria: metodo,
+    );
     setState(() => _actualizando = metodo);
+    widget.onMetodoSeleccionado?.call(metodo);
     try {
       await ViajesRepo.actualizarMetodoPagoViaje(
         viajeId: widget.viajeId,
         metodoPago: metodo,
       );
-    } catch (e) {
       if (!mounted) return;
+      final String etiqueta = switch (metodo) {
+        'efectivo' => 'Efectivo',
+        'transferencia' => 'Transferencia',
+        _ => 'Tarjeta',
+      };
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar el pago: $e')),
+        SnackBar(
+          content: Text(
+            tarjetaSinCobro
+                ? 'Tarjeta seleccionada (AZUL en desarrollo). Podés cambiar '
+                    'a efectivo o transferencia cuando quieras.'
+                : 'Pago actualizado: $etiqueta',
+          ),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      ClienteMetodoPagoViajeUi.limpiar(widget.viajeId);
+      if (!mounted) return;
+      setState(() {});
+      widget.onMetodoSeleccionado?.call(
+        MetodoPagoViaje.asientoCategoria(widget.metodoPagoActual),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo cambiar el pago: ${_motivo(e)}')),
       );
     } finally {
       if (mounted) setState(() => _actualizando = null);
@@ -58,7 +125,7 @@ class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
         oscuro ? Colors.white : Theme.of(context).colorScheme.onSurface;
     final Color fgMuted =
         oscuro ? Colors.white70 : fg.withValues(alpha: 0.65);
-    final String metodo = widget.metodoPagoActual;
+    final String metodo = _metodoMostrado;
     final bool tarjetaOn = PagoTarjetaClienteGate.mostrarOpcionTarjeta;
 
     final List<_MetodoPagoOpcion> opciones = <_MetodoPagoOpcion>[
@@ -204,21 +271,31 @@ class _ViajeMetodoPagoSelectorState extends State<ViajeMetodoPagoSelector> {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  Row(
-                    children: <Widget>[
-                      for (int i = 0; i < opciones.length; i++) ...<Widget>[
-                        if (i > 0) const SizedBox(width: 8),
-                        Expanded(
-                          child: _MetodoPagoTile(
-                            opcion: opciones[i],
-                            selected: selectedFor(opciones[i].value),
-                            busy: _actualizando == opciones[i].value,
-                            oscuro: oscuro,
-                            onTap: () => _elegir(opciones[i].value),
-                          ),
-                        ),
-                      ],
-                    ],
+                  LayoutBuilder(
+                    builder: (BuildContext context, BoxConstraints rowBox) {
+                      final int n = opciones.length;
+                      final double gap = 8.0 * (n - 1);
+                      final double anchoTile =
+                          n > 0 ? (rowBox.maxWidth - gap) / n : rowBox.maxWidth;
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          for (int i = 0; i < opciones.length; i++) ...<Widget>[
+                            if (i > 0) const SizedBox(width: 8),
+                            Expanded(
+                              child: _MetodoPagoTile(
+                                opcion: opciones[i],
+                                anchoTile: anchoTile,
+                                selected: selectedFor(opciones[i].value),
+                                busy: _actualizando == opciones[i].value,
+                                oscuro: oscuro,
+                                onTap: () => _elegir(opciones[i].value),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 10),
                   Text(
@@ -260,6 +337,7 @@ class _MetodoPagoOpcion {
 class _MetodoPagoTile extends StatelessWidget {
   const _MetodoPagoTile({
     required this.opcion,
+    required this.anchoTile,
     required this.selected,
     required this.busy,
     required this.oscuro,
@@ -267,6 +345,7 @@ class _MetodoPagoTile extends StatelessWidget {
   });
 
   final _MetodoPagoOpcion opcion;
+  final double anchoTile;
   final bool selected;
   final bool busy;
   final bool oscuro;
@@ -303,16 +382,20 @@ class _MetodoPagoTile extends StatelessWidget {
                     .withValues(alpha: 0.85),
           ];
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: busy ? null : onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
-          decoration: BoxDecoration(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: opcion.label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: busy ? null : onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+            decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             gradient: LinearGradient(
               begin: Alignment.topCenter,
@@ -428,24 +511,33 @@ class _MetodoPagoTile extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
-                opcion.label,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected
-                      ? (oscuro ? Colors.white : opcion.accentDeep)
-                      : (oscuro ? Colors.white70 : Colors.black87),
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  fontSize: 11.5,
-                  height: 1.15,
+              SizedBox(
+                width: double.infinity,
+                height: MediaQuery.textScalerOf(context).scale(28).clamp(26, 40),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.center,
+                  child: Text(
+                    _etiquetaMetodoPagoTile(context, opcion, anchoTile),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    softWrap: true,
+                    style: TextStyle(
+                      color: selected
+                          ? (oscuro ? Colors.white : opcion.accentDeep)
+                          : (oscuro ? Colors.white70 : Colors.black87),
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                      fontSize: 11.5,
+                      height: 1.15,
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    ),
     );
   }
 }

@@ -2,7 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb, kReleaseMode, TargetPlatform;
+    show
+        debugPrint,
+        defaultTargetPlatform,
+        kIsWeb,
+        kReleaseMode,
+        TargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -165,47 +170,69 @@ void _installErrorHandlers() {
     final bool viajeForzado =
         ActiveTripService.debeMantenerOverlayViajeEnShell ||
             ActiveTripService.debeBloquearShellSinViajeTaxista;
+    final bool clienteFinalizandoViaje =
+        ActiveTripService.flujoPostViajeClienteActivo;
     return Material(
       color: Colors.black,
       child: Builder(
         builder: (context) {
-          if (viajeForzado) {
+          if (viajeForzado || clienteFinalizandoViaje) {
+            final bool salidaCliente = clienteFinalizandoViaje &&
+                !ActiveTripService.debeBloquearShellSinViajeTaxista;
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'Entrando a tu viaje…',
-                      style: TextStyle(color: Colors.white, fontSize: 17),
+                    Text(
+                      salidaCliente
+                          ? 'Finalizando tu viaje…'
+                          : 'Entrando a tu viaje…',
+                      style: const TextStyle(color: Colors.white, fontSize: 17),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 10),
-                    const Text(
-                      'Hubo un fallo al dibujar la pantalla. '
-                      'Toca para abrir el viaje de nuevo (sin mapa si hace falta).',
-                      style: TextStyle(color: Colors.white70, height: 1.35),
+                    Text(
+                      salidaCliente
+                          ? 'Volviendo al inicio. Tu viaje ya terminó.'
+                          : 'Hubo un fallo al dibujar la pantalla. '
+                              'Toca para abrir el viaje de nuevo (sin mapa si hace falta).',
+                      style:
+                          const TextStyle(color: Colors.white70, height: 1.35),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 18),
-                    FilledButton(
+                    if (!salidaCliente)
+                      FilledButton(
+                        onPressed: () {
+                          if (ActiveTripService
+                              .debeBloquearShellSinViajeTaxista) {
+                            unawaited(
+                              NavigationService.clearAndGoViajeEnCursoTaxista(),
+                            );
+                          } else {
+                            NavigationService.retomarViajeActivoCliente();
+                          }
+                        },
+                        child: const Text('Abrir mi viaje'),
+                      ),
+                    if (!salidaCliente) const SizedBox(height: 10),
+                    OutlinedButton(
                       onPressed: () {
-                        ActiveTripService.mantenerOverlayViajeEnShell(
-                          const Duration(seconds: 120),
-                        );
+                        ActiveTripService.cancelarMantenimientoOverlayViaje();
                         if (ActiveTripService
                             .debeBloquearShellSinViajeTaxista) {
-                          unawaited(
-                            NavigationService.clearAndGoViajeEnCursoTaxista(),
-                          );
+                          unawaited(NavigationService.irAlInicioTaxista());
                         } else {
                           unawaited(
-                            NavigationService.clearAndGoViajeEnCursoCliente(),
+                            NavigationService.volverAlInicioClienteUrgente(
+                              context: context,
+                            ),
                           );
                         }
                       },
-                      child: const Text('Abrir mi viaje'),
+                      child: const Text('Volver al inicio'),
                     ),
                   ],
                 ),
@@ -343,7 +370,14 @@ class _RaiBootstrapState extends State<RaiBootstrap> {
         unawaited(PoolDeepLink.install());
         unawaited(AzulDeepLink.install());
       }
-      await NotificationService.I.ensureInited();
+      await NotificationService.I.ensureInited().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint(
+            '[RaiBootstrap] NotificationService timeout; continúa arranque',
+          );
+        },
+      );
       FcmService.registerForegroundHandlers();
       if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
         // Pasivo: nunca Geolocator.requestPermission en cold start (Play policy / UX).
@@ -611,163 +645,164 @@ class _RaiAppState extends State<RaiApp> {
         final ThemeData lightTheme = buildLight();
         final ThemeData darkTheme = buildDark();
         return MaterialApp(
-        title: kAppDisplayName,
-        debugShowCheckedModeBanner: false,
-        navigatorKey: NavigationService.navigatorKey,
-        builder: (ctx, child) {
-          final Brightness brightness;
-          switch (mode) {
-            case ThemeMode.dark:
-              brightness = Brightness.dark;
-              break;
-            case ThemeMode.light:
-              brightness = Brightness.light;
-              break;
-            case ThemeMode.system:
-              brightness = MediaQuery.platformBrightnessOf(ctx);
-              break;
-          }
-          final isDark = brightness == Brightness.dark;
-          final overlay = SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
-            systemNavigationBarColor:
-                isDark ? const Color(0xFF0D0D0D) : const Color(0xFFF6F6F6),
-            systemNavigationBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
-            systemNavigationBarContrastEnforced: true,
-          );
-          // Aplica el factor de escala global de texto (tipo inDrive).
-          // Si el usuario nunca tocó nada, el factor es 1.0 y todo queda
-          // exactamente igual que antes. El clamp evita overflow en cards
-          // y botones existentes.
-          final MediaQueryData mq = MediaQuery.of(ctx);
-          final double userFactor = TextScaleService.factor.value;
-          final scaledMq = mq.copyWith(
-            textScaler: TextScaler.linear(userFactor).clamp(
-              minScaleFactor: TextScaleService.minFactor,
-              maxScaleFactor: TextScaleService.maxFactor,
-            ),
-          );
-          return AnnotatedRegion<SystemUiOverlayStyle>(
-            value: overlay,
-            sized: false,
-            child: MediaQuery(
-              data: scaledMq,
-              child: child ?? const SizedBox.shrink(),
-            ),
-          );
-        },
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: const [
-          Locale('es'),
-          Locale('es', 'DO'),
-          Locale('en'),
-        ],
-        theme: lightTheme,
-        darkTheme: darkTheme,
-        themeMode: mode,
-        routes: {
-          '/login': (_) => const SeleccionUsuario(),
-          '/auth_check': (_) => const AuthCheck(),
-
-          // 🔴 NUEVO - REGISTRO (DESDE AUTH)
-          '/registro_cliente': (_) => const RegistroCliente(),
-          '/registro_taxista': (_) => const RegistroTaxista(),
-
-          // Cliente
-          '/cliente_home': (_) => const ClienteShellWithDeepLink(),
-          '/solicitar_viaje_ahora': (_) => const ClienteBloqueoGate(
-                child: ClienteVerificacionIdentidadGate(
-                  child: ProgramarViaje(modoAhora: true),
-                ),
-              ),
-          '/programar_viaje': (_) => const ClienteBloqueoGate(
-                child: ClienteVerificacionIdentidadGate(
-                  child: ProgramarViaje(modoAhora: false),
-                ),
-              ),
-          '/programar_viaje_multi': (_) => const ClienteBloqueoGate(
-                child: ClienteVerificacionIdentidadGate(
-                  child: ProgramarViajeMulti(),
-                ),
-              ),
-          '/corporativo': (_) => const CorporativoWebEntry(),
-          '/empresas': (_) => const CorporativoWebEntry(),
-          '/viaje_en_curso_cliente': (_) => const ClientePantallaViajeActivo(),
-          '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
-          '/metodos_pago': (_) => const MetodosPago(),
-          '/espera_asignacion_turismo': (context) {
-            final Object? args =
-                ModalRoute.of(context)?.settings.arguments;
-            String viajeId = '';
-            if (args is String) {
-              viajeId = args.trim();
-            } else if (args is Map) {
-              viajeId = (args['viajeId'] ?? args['id'] ?? '').toString().trim();
+          title: kAppDisplayName,
+          debugShowCheckedModeBanner: false,
+          navigatorKey: NavigationService.navigatorKey,
+          builder: (ctx, child) {
+            final Brightness brightness;
+            switch (mode) {
+              case ThemeMode.dark:
+                brightness = Brightness.dark;
+                break;
+              case ThemeMode.light:
+                brightness = Brightness.light;
+                break;
+              case ThemeMode.system:
+                brightness = MediaQuery.platformBrightnessOf(ctx);
+                break;
             }
-            return EsperaAsignacionTurismo(viajeId: viajeId);
+            final isDark = brightness == Brightness.dark;
+            final overlay = SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness:
+                  isDark ? Brightness.light : Brightness.dark,
+              systemNavigationBarColor:
+                  isDark ? const Color(0xFF0D0D0D) : const Color(0xFFF6F6F6),
+              systemNavigationBarIconBrightness:
+                  isDark ? Brightness.light : Brightness.dark,
+              systemNavigationBarContrastEnforced: true,
+            );
+            // Aplica el factor de escala global de texto (tipo inDrive).
+            // Si el usuario nunca tocó nada, el factor es 1.0 y todo queda
+            // exactamente igual que antes. El clamp evita overflow en cards
+            // y botones existentes.
+            final MediaQueryData mq = MediaQuery.of(ctx);
+            final double userFactor = TextScaleService.factor.value;
+            final scaledMq = mq.copyWith(
+              textScaler: TextScaler.linear(userFactor).clamp(
+                minScaleFactor: TextScaleService.minFactor,
+                maxScaleFactor: TextScaleService.maxFactor,
+              ),
+            );
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: overlay,
+              sized: false,
+              child: MediaQuery(
+                data: scaledMq,
+                child: child ?? const SizedBox.shrink(),
+              ),
+            );
           },
-          '/historial_pagos': (_) => const HistorialPagosCliente(),
-          '/pago_metodo': (_) => const PagoMetodo(),
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: const [
+            Locale('es'),
+            Locale('es', 'DO'),
+            Locale('en'),
+          ],
+          theme: lightTheme,
+          darkTheme: darkTheme,
+          themeMode: mode,
+          routes: {
+            '/login': (_) => const SeleccionUsuario(),
+            '/auth_check': (_) => const AuthCheck(),
 
-          // comunes
-          '/soporte': (_) => const Soporte(),
-          '/configuracion_perfil': (_) => const ConfiguracionPerfil(),
-          rutaBolaPueblo: (_) => const BolaPuebloAPuebloPage(),
-          rutaBolaConductoresCliente: (_) =>
-              const BolaConductoresEnRutaClientePage(),
+            // 🔴 NUEVO - REGISTRO (DESDE AUTH)
+            '/registro_cliente': (_) => const RegistroCliente(),
+            '/registro_taxista': (_) => const RegistroTaxista(),
 
-          // taxista
-          '/taxista_entry': (_) => const RaiTaxistaAccessGate(
-                child: TaxistaEntry(),
-              ),
-          '/completar_registro_taxista': (_) =>
-              const CompletarRegistroTaxista(),
-          '/viaje_disponible': (_) => const RaiTaxistaAccessGate(
-                child: TaxistaEntry(),
-              ),
-          '/viaje_en_curso_taxista': (_) => const ViajeEnCursoTaxista(),
-          '/historial_viajes_taxista': (_) => const HistorialViajesTaxista(),
+            // Cliente
+            '/cliente_home': (_) => const ClienteShellWithDeepLink(),
+            '/solicitar_viaje_ahora': (_) => const ClienteBloqueoGate(
+                  child: ClienteVerificacionIdentidadGate(
+                    child: ProgramarViaje(modoAhora: true),
+                  ),
+                ),
+            '/programar_viaje': (_) => const ClienteBloqueoGate(
+                  child: ClienteVerificacionIdentidadGate(
+                    child: ProgramarViaje(modoAhora: false),
+                  ),
+                ),
+            '/programar_viaje_multi': (_) => const ClienteBloqueoGate(
+                  child: ClienteVerificacionIdentidadGate(
+                    child: ProgramarViajeMulti(),
+                  ),
+                ),
+            '/corporativo': (_) => const CorporativoWebEntry(),
+            '/empresas': (_) => const CorporativoWebEntry(),
+            '/viaje_en_curso_cliente': (_) =>
+                const ClientePantallaViajeActivo(),
+            '/historial_viajes_cliente': (_) => const HistorialViajesCliente(),
+            '/metodos_pago': (_) => const MetodosPago(),
+            '/espera_asignacion_turismo': (context) {
+              final Object? args = ModalRoute.of(context)?.settings.arguments;
+              String viajeId = '';
+              if (args is String) {
+                viajeId = args.trim();
+              } else if (args is Map) {
+                viajeId =
+                    (args['viajeId'] ?? args['id'] ?? '').toString().trim();
+              }
+              return EsperaAsignacionTurismo(viajeId: viajeId);
+            },
+            '/historial_pagos': (_) => const HistorialPagosCliente(),
+            '/pago_metodo': (_) => const PagoMetodo(),
 
-          // 🔴 NUEVAS RUTAS DE PAGOS
-          '/mis_pagos': (_) => const MisPagos(),
-          '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
-          '/verificar_pagos': (_) => const AdminGate(child: VerificarPagos()),
-          '/terminos_politica': (_) => const TermsPolicyScreen(),
-          '/privacidad': (_) => const PoliticaPrivacidadPage(),
-          '/eliminar_cuenta': (_) => const EliminarCuentaPage(),
-          '/login_admin': (_) => const LoginAdmin(),
-          '/login/corporativo': (_) => const CorporativoWebEntry(),
-          '/admin': (_) => const AdminGate(),
-        },
-        onGenerateRoute: (settings) {
-          final name = settings.name ?? '';
-          if (name == '/corporativo' ||
-              name == '/empresas' ||
-              name.startsWith('/empresas') ||
-              name == '/login/corporativo' ||
-              name.startsWith('/login/corporativo')) {
+            // comunes
+            '/soporte': (_) => const Soporte(),
+            '/configuracion_perfil': (_) => const ConfiguracionPerfil(),
+            rutaBolaPueblo: (_) => const BolaPuebloAPuebloPage(),
+            rutaBolaConductoresCliente: (_) =>
+                const BolaConductoresEnRutaClientePage(),
+
+            // taxista
+            '/taxista_entry': (_) => const RaiTaxistaAccessGate(
+                  child: TaxistaEntry(),
+                ),
+            '/completar_registro_taxista': (_) =>
+                const CompletarRegistroTaxista(),
+            '/viaje_disponible': (_) => const RaiTaxistaAccessGate(
+                  child: TaxistaEntry(),
+                ),
+            '/viaje_en_curso_taxista': (_) => const ViajeEnCursoTaxista(),
+            '/historial_viajes_taxista': (_) => const HistorialViajesTaxista(),
+
+            // 🔴 NUEVAS RUTAS DE PAGOS
+            '/mis_pagos': (_) => const MisPagos(),
+            '/bloqueado_por_pagos': (_) => const BloqueadoPorPagos(),
+            '/verificar_pagos': (_) => const AdminGate(child: VerificarPagos()),
+            '/terminos_politica': (_) => const TermsPolicyScreen(),
+            '/privacidad': (_) => const PoliticaPrivacidadPage(),
+            '/eliminar_cuenta': (_) => const EliminarCuentaPage(),
+            '/login_admin': (_) => const LoginAdmin(),
+            '/login/corporativo': (_) => const CorporativoWebEntry(),
+            '/admin': (_) => const AdminGate(),
+          },
+          onGenerateRoute: (settings) {
+            final name = settings.name ?? '';
+            if (name == '/corporativo' ||
+                name == '/empresas' ||
+                name.startsWith('/empresas') ||
+                name == '/login/corporativo' ||
+                name.startsWith('/login/corporativo')) {
+              return MaterialPageRoute<void>(
+                builder: (_) => const CorporativoWebEntry(),
+                settings: settings,
+              );
+            }
+            return null;
+          },
+          onUnknownRoute: (settings) {
             return MaterialPageRoute<void>(
-              builder: (_) => const CorporativoWebEntry(),
+              builder: (_) => _raizWebSegunUrl(),
               settings: settings,
             );
-          }
-          return null;
-        },
-        onUnknownRoute: (settings) {
-          return MaterialPageRoute<void>(
-            builder: (_) => _raizWebSegunUrl(),
-            settings: settings,
-          );
-        },
-        home: _raizWebSegunUrl(),
-      );
+          },
+          home: _raizWebSegunUrl(),
+        );
       },
     );
   }
@@ -844,11 +879,12 @@ class _AuthGate extends StatelessWidget {
       builder: (context, authSnap) {
         final user = authSnap.data ?? FirebaseAuth.instance.currentUser;
         if (user == null) {
-          final bool isDesktopNativo =
-              !kIsWeb &&
+          final bool isDesktopNativo = !kIsWeb &&
               (defaultTargetPlatform == TargetPlatform.windows ||
                   defaultTargetPlatform == TargetPlatform.macOS);
-          return isDesktopNativo ? const LoginAdmin() : const SeleccionUsuario();
+          return isDesktopNativo
+              ? const LoginAdmin()
+              : const SeleccionUsuario();
         }
 
         PushService.ensureInitedAndSaved();

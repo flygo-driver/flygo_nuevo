@@ -74,16 +74,21 @@ class AdminConfigService {
     });
   }
 
+  /// [permitirViajeConPrepagoParcial] `null` conserva el valor actual (modo estricto
+  /// si nunca se activó); `true` deja aceptar viajes con prepago incompleto.
   static Future<void> updateComisionPrepagoConfig({
     required double minimoOperativoRd,
     required double umbralPreventivoRd,
     required String motivo,
+    bool? permitirViajeConPrepagoParcial,
   }) async {
     final c = _fx.httpsCallable('updateComisionPrepagoConfig');
     await c.call(<String, dynamic>{
       'minimoOperativoRd': minimoOperativoRd,
       'umbralPreventivoRd': umbralPreventivoRd,
       'motivo': motivo,
+      if (permitirViajeConPrepagoParcial != null)
+        'permitirViajeConPrepagoParcial': permitirViajeConPrepagoParcial,
     });
   }
 

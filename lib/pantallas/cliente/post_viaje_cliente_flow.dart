@@ -45,17 +45,20 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   double _calificacion = 5;
   final TextEditingController _comentario = TextEditingController();
   bool _cargandoRating = false;
+
   /// Tras enviar calificación u omitir: el stream puede traer aún `calificado: false`
   /// y devolvía al paso 1 (botones “muertos”). Forzamos no bajar de cierre.
   bool _salioDeCalificacion = false;
   bool _calificacionEnviada = false;
   bool _omitioCalificacionPorThrottle = false;
+  bool _salientoEnCurso = false;
   bool? _solicitaCalificacionMutua;
   String? _uidCliente;
   static const int _maxComentario = 280;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _viajeSub;
   DocumentSnapshot<Map<String, dynamic>>? _viajeSnap;
+
   /// Copia local hasta tener [DocumentSnapshot] fiable (semilla o post-[get]).
   Map<String, dynamic>? _viajeDatosUi;
   Object? _viajeListenError;
@@ -71,8 +74,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     ClientePostViajeReopenGuard.markOpened(widget.viajeId);
     RaiConnectivityService.instance.ensureStarted();
     unawaited(CalificacionPendienteService.flushPendientes());
-    // Evita que el shell siga en modo “viaje en curso” tapando tabs / bloqueando toques.
-    ActiveTripService.cancelarMantenimientoOverlayViaje();
+    // Mismo criterio que [PostViajeClienteNav]: inicio bajo factura/recibo, sin overlay.
+    ActiveTripService.prepararSalidaClientePostViaje(viajeId: widget.viajeId);
     final Map<String, dynamic>? sem = widget.viajeDataSemilla;
     if (sem != null && sem.isNotEmpty) {
       _viajeDatosUi = Map<String, dynamic>.from(sem);
@@ -109,8 +112,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
 
   bool _esErrorPermisoLectura(Object e) {
     final String s = e.toString().toLowerCase();
-    return s.contains('permission-denied') ||
-        s.contains('permission_denied');
+    return s.contains('permission-denied') || s.contains('permission_denied');
   }
 
   String? _uidClienteEfectivo() =>
@@ -127,8 +129,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     if (error == null || !_esErrorPermisoLectura(error)) return false;
     final String? uid = _uidClienteEfectivo();
     if (uid == null || uid.isEmpty) return false;
-    final Map<String, dynamic>? sem =
-        _viajeDatosUi ?? widget.viajeDataSemilla;
+    final Map<String, dynamic>? sem = _viajeDatosUi ?? widget.viajeDataSemilla;
     if (sem == null || sem.isEmpty) return false;
     return _semillaPerteneceACliente(sem, uid);
   }
@@ -154,10 +155,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Future<void> _bootstrapViajeDoc() async {
-    final DocumentReference<Map<String, dynamic>> ref = FirebaseFirestore
-        .instance
-        .collection('viajes')
-        .doc(widget.viajeId);
+    final DocumentReference<Map<String, dynamic>> ref =
+        FirebaseFirestore.instance.collection('viajes').doc(widget.viajeId);
 
     Future<DocumentSnapshot<Map<String, dynamic>>> leerViaje() {
       return ref.get(const GetOptions(source: Source.serverAndCache)).timeout(
@@ -171,7 +170,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     Object? ultimoError;
     for (int intento = 0; intento < 3; intento++) {
       try {
-        final DocumentSnapshot<Map<String, dynamic>> primero = await leerViaje();
+        final DocumentSnapshot<Map<String, dynamic>> primero =
+            await leerViaje();
         if (!mounted) return;
         setState(() {
           _viajeSnap = primero;
@@ -223,7 +223,9 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       },
     );
 
-    if (!mounted || ultimoError == null || _puedeMostrarConSemilla(ultimoError)) {
+    if (!mounted ||
+        ultimoError == null ||
+        _puedeMostrarConSemilla(ultimoError)) {
       return;
     }
     // Reintento en background por si Auth/Firestore sincronizan un poco tarde.
@@ -252,8 +254,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
 
   bool _viajeCompletadoParaUi(Map<String, dynamic> d) {
     if (d['completado'] == true) return true;
-    final String st =
-        EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
     return EstadosViaje.esCompletado(st);
   }
 
@@ -462,22 +463,42 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Future<void> _irInicio() async {
-    if (!mounted) return;
-    final String? uid = _uidClienteEfectivo();
-    if (uid != null && uid.isNotEmpty) {
-      unawaited(
-        ClientePostViajeReopenGuard.markCompleted(
-          viajeId: widget.viajeId,
-          uidCliente: uid,
-        ),
-      );
-    }
+    if (_salientoEnCurso) return;
+    _salientoEnCurso = true;
+    if (mounted) setState(() {});
 
-    await NavigationService.irAlInicioCliente(
-      context: context,
-      viajeId: widget.viajeId,
-      forzarLimpiarViajeActivo: true,
-    );
+    try {
+      final String vid = widget.viajeId.trim();
+      final String? uid = _uidClienteEfectivo();
+
+      if (vid.isNotEmpty) {
+        ActiveTripService.liberarClienteTrasCancelacionOViajeTerminal(vid);
+      }
+
+      if (uid != null && uid.isNotEmpty) {
+        await ClientePostViajeReopenGuard.markCompleted(
+          viajeId: vid,
+          uidCliente: uid,
+        );
+      }
+
+      ActiveTripService.cerrarFlujoPostViajeCliente();
+
+      if (mounted) {
+        final NavigatorState nav =
+            Navigator.of(context, rootNavigator: true);
+        if (nav.canPop()) {
+          nav.pop();
+        }
+      }
+
+      await NavigationService.volverAlInicioClienteUrgente(
+        viajeId: vid.isNotEmpty ? vid : null,
+      );
+    } finally {
+      _salientoEnCurso = false;
+      if (mounted) setState(() {});
+    }
   }
 
   Widget _stepResumen({
@@ -527,20 +548,27 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     );
   }
 
+  String _etiquetaChoferServicio(Viaje v, Map<String, dynamic> d) {
+    final String ts =
+        (d['tipoServicio'] ?? v.tipoServicio).toString().trim().toLowerCase();
+    return ts == 'motor' ? 'motorista' : 'conductor';
+  }
+
   Widget _stepCalificar(Viaje v, String uid, Map<String, dynamic> d) {
     final ya = v.calificado == true;
     final String uidTx = v.uidTaxista.isNotEmpty
         ? v.uidTaxista
         : (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+    final String etiquetaChofer = _etiquetaChoferServicio(v, d);
     final double bottomPad = _scrollBottomPad(context);
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(24, 8, 24, bottomPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'Califica a tu conductor',
-            style: TextStyle(
+          Text(
+            'Califica a tu $etiquetaChofer',
+            style: const TextStyle(
                 color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
@@ -659,9 +687,6 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           if (!ya)
             TextButton(
               onPressed: () {
-                try {
-                  ActiveTripService.cancelarMantenimientoOverlayViaje();
-                } catch (_) {}
                 setState(() {
                   _salioDeCalificacion = true;
                 });
@@ -676,17 +701,21 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Widget _stepCierre() {
-    final Map<String, dynamic>? datos =
-        _viajeSnap?.data() ?? _viajeDatosUi;
-    final String metodoRaw =
-        (datos?['metodoPago'] ?? '').toString();
-    final bool tarjetaPagada = datos != null &&
-        MetodoPagoViaje.tarjetaPagadoVerificado(datos);
+    final Map<String, dynamic>? datos = _viajeSnap?.data() ?? _viajeDatosUi;
+    final String metodoRaw = (datos?['metodoPago'] ?? '').toString();
+    final bool tarjetaPagada =
+        datos != null && MetodoPagoViaje.tarjetaPagadoVerificado(datos);
     final bool esEfectivo = MetodoPagoViaje.esEfectivo(metodoRaw);
+    final String etiquetaChofer =
+        (datos?['tipoServicio'] ?? '').toString().trim().toLowerCase() ==
+                'motor'
+            ? 'motorista'
+            : 'conductor';
 
     final String titulo;
     if (_calificacionEnviada) {
-      titulo = '¡Conductor calificado!';
+      titulo =
+          '¡${etiquetaChofer[0].toUpperCase()}${etiquetaChofer.substring(1)} calificado!';
     } else if (tarjetaPagada) {
       titulo = '¡Pago exitoso!';
     } else if (esEfectivo) {
@@ -706,7 +735,7 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       subtitulo = 'Gracias por viajar con RAI.';
     } else if (esEfectivo) {
       subtitulo =
-          'Recuerda entregar el monto al conductor si aún no lo hiciste. '
+          'Recuerda entregar el monto al $etiquetaChofer si aún no lo hiciste. '
           'Gracias por viajar con RAI.';
     } else {
       subtitulo = 'Gracias por viajar con RAI.';
@@ -751,11 +780,12 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
           Text(
             subtitulo,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.4),
+            style: const TextStyle(
+                color: Colors.white70, fontSize: 15, height: 1.4),
           ),
           const SizedBox(height: 36),
           FilledButton(
-            onPressed: () => _irInicio(),
+            onPressed: _salientoEnCurso ? null : () => unawaited(_irInicio()),
             style: FilledButton.styleFrom(
               backgroundColor: Colors.greenAccent,
               foregroundColor: Colors.black87,
@@ -763,8 +793,10 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14)),
             ),
-            child: const Text('Volver al inicio',
-                style: TextStyle(fontWeight: FontWeight.w800)),
+            child: Text(
+              _salientoEnCurso ? 'Volviendo al inicio…' : 'Volver al inicio',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
           ),
         ],
       ),
@@ -811,7 +843,8 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   }
 
   Widget _buildViajeBody(String uidCliente) {
-    if (_viajeListenError != null && !_puedeMostrarConSemilla(_viajeListenError)) {
+    if (_viajeListenError != null &&
+        !_puedeMostrarConSemilla(_viajeListenError)) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -840,17 +873,28 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
     } else {
       raw = _viajeDatosUi;
     }
+    raw ??= widget.viajeDataSemilla;
 
     if (raw == null) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.greenAccent),
+      return _PostViajeEsperaPanel(
+        titulo: 'Cargando recibo del viaje…',
+        onIrInicio: () => unawaited(_irInicio()),
       );
     }
 
     Map<String, dynamic> d = Map<String, dynamic>.from(raw);
-    final Map<String, dynamic>? sem = widget.viajeDataSemilla;
+    final Map<String, dynamic>? sem = widget.viajeDataSemilla ?? _viajeDatosUi;
     if (sem != null && sem.isNotEmpty) {
       d = <String, dynamic>{...Map<String, dynamic>.from(sem), ...d};
+      if (sem['completado'] == true) {
+        d['completado'] = true;
+      }
+      final String stSem =
+          EstadosViaje.normalizar((sem['estado'] ?? '').toString());
+      if (EstadosViaje.esCompletado(stSem)) {
+        d['estado'] = sem['estado'];
+        d['completado'] = true;
+      }
     }
     Viaje v;
     try {
@@ -890,11 +934,9 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
       return _canceladoUi(v);
     }
     if (!esOk) {
-      return const Center(
-        child: Text(
-          'Actualizando estado del viaje…',
-          style: TextStyle(color: Colors.white70),
-        ),
+      return _PostViajeEsperaPanel(
+        titulo: 'Preparando tu recibo…',
+        onIrInicio: () => unawaited(_irInicio()),
       );
     }
 
@@ -918,10 +960,36 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
   Widget build(BuildContext context) {
     final String? uid = _uidCliente ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
-      return const Scaffold(
+      if (_viajeListenError != null) {
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '$_viajeListenError',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () => unawaited(_irInicio()),
+                    child: const Text('Ir al inicio'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+      return Scaffold(
         backgroundColor: Colors.black,
-        body: Center(
-          child: CircularProgressIndicator(color: Colors.greenAccent),
+        body: _PostViajeEsperaPanel(
+          titulo: 'Verificando tu sesión…',
+          onIrInicio: () => unawaited(_irInicio()),
         ),
       );
     }
@@ -951,6 +1019,84 @@ class _PostViajeClienteFlowState extends State<PostViajeClienteFlow> {
         ),
         body: SafeArea(
           child: _buildViajeBody(uid),
+        ),
+      ),
+    );
+  }
+}
+
+/// Spinner con escape tras timeout (post-factura / red lenta).
+class _PostViajeEsperaPanel extends StatefulWidget {
+  const _PostViajeEsperaPanel({
+    required this.titulo,
+    required this.onIrInicio,
+  });
+
+  final String titulo;
+  final VoidCallback onIrInicio;
+
+  @override
+  State<_PostViajeEsperaPanel> createState() => _PostViajeEsperaPanelState();
+}
+
+class _PostViajeEsperaPanelState extends State<_PostViajeEsperaPanel> {
+  static const Duration _kTimeout = Duration(seconds: 10);
+  Timer? _timer;
+  bool _mostrarEscape = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(_kTimeout, () {
+      if (!mounted) return;
+      setState(() => _mostrarEscape = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Colors.greenAccent,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.titulo,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 15),
+            ),
+            if (_mostrarEscape) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Si tarda demasiado, podés volver al inicio. Tu viaje ya está cerrado.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Colors.white54, fontSize: 13, height: 1.35),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: widget.onIrInicio,
+                icon: const Icon(Icons.home_rounded),
+                label: const Text('Ir al inicio'),
+              ),
+            ],
+          ],
         ),
       ),
     );

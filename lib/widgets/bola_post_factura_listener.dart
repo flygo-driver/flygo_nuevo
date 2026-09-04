@@ -13,6 +13,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flygo_nuevo/pantallas/comun/factura_bola_pueblo.dart';
 import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/widgets/bola_post_factura_reopen_guard.dart';
+import 'package:flygo_nuevo/utils/bola_ahorro_pool_isolation.dart';
 
 class BolaPostFacturaListener extends StatefulWidget {
   final Widget child;
@@ -39,6 +40,7 @@ class _BolaPostFacturaListenerState extends State<BolaPostFacturaListener> {
   }
 
   Future<void> _arrancar() async {
+    if (BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) return;
     await BolaPostFacturaReopenGuard.hydrateFromPrefs();
     final User? u = FirebaseAuth.instance.currentUser;
     if (u == null || !mounted) return;

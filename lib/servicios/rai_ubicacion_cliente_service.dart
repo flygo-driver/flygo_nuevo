@@ -47,6 +47,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
 
   StreamSubscription<ServiceStatus>? _gpsSub;
   Timer? _refreshDebounce;
+  DateTime _ultimoRefresco = DateTime.fromMillisecondsSinceEpoch(0);
   bool _started = false;
 
   bool get ubicacionLista => modo.value == RaiUbicacionClienteModo.listo;
@@ -71,13 +72,13 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
         _programarRefrescar();
       });
     } catch (_) {}
-    await refrescar();
+    await refrescar(forzar: true);
   }
 
-  void _programarRefrescar() {
+  void _programarRefrescar({bool forzar = false}) {
     _refreshDebounce?.cancel();
     _refreshDebounce = Timer(const Duration(milliseconds: 450), () {
-      unawaited(refrescar());
+      unawaited(refrescar(forzar: forzar));
     });
   }
 
@@ -95,7 +96,7 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _programarRefrescar();
+      _programarRefrescar(forzar: true);
       unawaited(_continuarActivacionSiUsuarioVolvioDeAjustes());
     }
   }
@@ -146,7 +147,14 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
     }
   }
 
-  Future<void> refrescar() async {
+  Future<void> refrescar({bool forzar = false}) async {
+    final DateTime ahora = DateTime.now();
+    if (!forzar &&
+        ahora.difference(_ultimoRefresco) < const Duration(milliseconds: 800)) {
+      return;
+    }
+    _ultimoRefresco = ahora;
+
     final bool yaConcedio = await prefsIndicaListoAntes();
     final snap = await GpsService.readServiceAndPermissionStabilizedNoRequest(
       extendedAfterPriorGrant: yaConcedio,
@@ -166,9 +174,11 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
           next = RaiUbicacionClienteModo.listo;
           feedbackSinUbicacion.value = null;
           await _marcarListoEnPrefs();
-        } else if (modo.value == RaiUbicacionClienteModo.listo) {
-          // Falso negativo al volver de segundo plano: no molestar con banner.
-          return;
+        } else if (modo.value == RaiUbicacionClienteModo.listo ||
+            await _gpsRespondeTrasConcesionPrevia()) {
+          next = RaiUbicacionClienteModo.listo;
+          feedbackSinUbicacion.value = null;
+          await _marcarListoEnPrefs();
         } else {
           next = RaiUbicacionClienteModo.permisoPendiente;
         }
@@ -187,10 +197,26 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
 
     if (next == RaiUbicacionClienteModo.listo) {
       feedbackSinUbicacion.value = null;
+      await LocationPermissionService.limpiarUbicacionDenegadaTrasBanner();
+      await LocationPermissionService.limpiarActivacionDesdeAppRai();
       return;
     }
 
     await _restaurarFeedbackDenegadoSiCorresponde(next);
+  }
+
+  /// Si ya concedió antes y el teléfono tiene GPS activo, confiar en última posición
+  /// conocida (evita pedir «Activar ubicación» otra vez al reabrir la app).
+  Future<bool> _gpsRespondeTrasConcesionPrevia() async {
+    try {
+      final Position? pos = await Geolocator.getLastKnownPosition();
+      return pos != null &&
+          pos.latitude.isFinite &&
+          pos.longitude.isFinite &&
+          !(pos.latitude == 0 && pos.longitude == 0);
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _restaurarFeedbackDenegadoSiCorresponde(
@@ -319,6 +345,20 @@ class RaiUbicacionClienteService with WidgetsBindingObserver {
             : 'Toca «Abrir ajustes» o ve a Cuenta → Ubicación para permitir ubicación.';
       case RaiUbicacionClienteModo.listo:
         return '';
+    }
+  }
+
+  /// Subtítulo corto para Cuenta → Ubicación (estado en tiempo real).
+  String get subtituloCuentaMenu {
+    switch (modo.value) {
+      case RaiUbicacionClienteModo.listo:
+        return 'GPS activo · listo para cotizar y viajar';
+      case RaiUbicacionClienteModo.gpsApagado:
+        return 'GPS desactivado · tócalo para activarlo';
+      case RaiUbicacionClienteModo.permisoPendiente:
+        return 'Permiso pendiente · necesario para cotizar';
+      case RaiUbicacionClienteModo.permisoBloqueado:
+        return 'Permiso bloqueado · abre ajustes del teléfono';
     }
   }
 

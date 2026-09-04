@@ -6,7 +6,6 @@ import 'package:flygo_nuevo/pantallas/chat/chat_screen.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_ui.dart';
 import 'package:flygo_nuevo/servicios/chat_repo.dart';
 import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
-import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/widgets/rai_app_bar.dart';
 
 /// Chat encargado ↔ chofer (sin exponer teléfonos personales).
@@ -70,10 +69,11 @@ class _CorporativoChatEncargadoPageState
       );
     }
 
-    await ViajesRepo.ensureChatDocForViaje(widget.viajeId);
-    await ChatRepo.ensureViajeChatParticipantes(
+    await ChatRepo.prepareViajeChat(
       viajeId: widget.viajeId,
-      participantes: {encargadoUid, choferUid},
+      uidA: encargadoUid,
+      uidB: choferUid,
+      participantesExtra: {encargadoUid, choferUid},
     );
 
     return _ChatCorpInit(

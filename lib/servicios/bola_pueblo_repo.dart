@@ -6,6 +6,7 @@ import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/bola_pueblo_firestore_sync.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
+import 'package:flygo_nuevo/utils/bola_ahorro_pool_isolation.dart';
 
 class BolaPuebloRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -215,6 +216,47 @@ class BolaPuebloRepo {
     }
   }
 
+  /// Solo memoria de sesión: oculta bolas con espejo muerto sin escribir Firestore.
+  static Future<Set<String>> _ocultarBolasEspejoMuertoEnSesionSinEscrituras(
+    String u,
+  ) async {
+    final Set<String> ocultar = <String>{};
+    try {
+      final QuerySnapshot<Map<String, dynamic>> qs = await _col
+          .orderBy('createdAt', descending: true)
+          .limit(200)
+          .get();
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in qs.docs) {
+        final Map<String, dynamic> d = doc.data();
+        final String estado = (d['estado'] ?? '').toString().trim();
+        if (estado == 'cancelada' || estado == 'finalizada') continue;
+
+        final String owner = (d['createdByUid'] ?? '').toString();
+        final String uidTx = (d['uidTaxista'] ?? '').toString();
+        final String uidCli = (d['uidCliente'] ?? '').toString();
+        if (u != owner && u != uidTx && u != uidCli) continue;
+
+        final String viajeEspejoId =
+            (d['viajeEspejoId'] ?? '').toString().trim();
+        if (viajeEspejoId.isEmpty) continue;
+
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> vSnap =
+              await _db.collection('viajes').doc(viajeEspejoId).get();
+          if (vSnap.exists && !_espejoViajeInactivo(vSnap.data())) {
+            continue;
+          }
+        } catch (_) {
+          // Sin lectura del espejo: tratar como muerto para no ensuciar el pool.
+        }
+        ocultar.add(doc.id);
+      }
+    } catch (e, st) {
+      debugPrint('[BOLA_AHORRO] ocultar espejo muerto sesión $e\n$st');
+    }
+    return ocultar;
+  }
+
   /// Si borraste el doc en `viajes` (consola) pero la bola sigue en `bolas_pueblo`.
   static Future<Set<String>> _reconciliarBolasEspejoBorrado(String u) async {
     final Set<String> ocultar = <String>{};
@@ -244,7 +286,19 @@ class BolaPuebloRepo {
           continue;
         }
 
-        await _limpiarViajeActivoIdUsuario(u);
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> userSnap =
+              await _db.collection('usuarios').doc(u).get();
+          final String activo =
+              (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+          if (activo == viajeEspejoId) {
+            await _limpiarViajeActivoIdUsuario(u);
+          }
+        } catch (e) {
+          debugPrint('[BOLA_AHORRO] reconciliar espejo viajeActivoId: $e');
+        }
+
+        ocultar.add(doc.id);
 
         if (estado == 'acordada') {
           try {
@@ -291,6 +345,15 @@ class BolaPuebloRepo {
     final String u =
         (uid ?? FirebaseAuth.instance.currentUser?.uid ?? '').trim();
     if (u.isEmpty) return <String>{};
+
+    if (BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) {
+      final Set<String> ocultar =
+          await _ocultarBolasEspejoMuertoEnSesionSinEscrituras(u);
+      _bolasOcultasEspejoMuerto
+        ..clear()
+        ..addAll(ocultar);
+      return ocultar;
+    }
 
     try {
       final DocumentSnapshot<Map<String, dynamic>> userSnap =

@@ -2,7 +2,7 @@
  * Crear viaje pendiente del pasajero (Admin SDK).
  * Evita permission-denied por reglas estrictas en `viajes` / `usuarios`.
  */
-import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
+import { FieldValue, GeoPoint, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { aplicarPromoNegocioAliadoEnTrip } from "./negocio_aliado_promo.js";
 
@@ -26,6 +26,10 @@ const ACTIVOS = new Set([
 
 function trimOrEmpty(v: unknown): string {
   return (v ?? "").toString().trim();
+}
+
+function onlyDigits(value: unknown): string {
+  return trimOrEmpty(value).replace(/\D/g, "");
 }
 
 function assertClienteCuentaReal(
@@ -191,6 +195,23 @@ function coordsValidas(lat: number | null, lon: number | null): boolean {
   return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 }
 
+function ensureRutaPuntosSnapshot(
+  trip: AnyMap,
+  latO: number,
+  lonO: number,
+  latD: number,
+  lonD: number,
+): void {
+  const existing = trip.rutaPuntos;
+  if (Array.isArray(existing) && existing.length > 0) return;
+  const origen = trimOrEmpty(trip.origen) || "Origen";
+  const destino = trimOrEmpty(trip.destino) || "Destino";
+  trip.rutaPuntos = [
+    { lat: round6(latO), lon: round6(lonO), label: origen, rol: "origen" },
+    { lat: round6(latD), lon: round6(lonD), label: destino, rol: "destino" },
+  ];
+}
+
 function assertTripCoordsAndPrecio(trip: AnyMap): void {
   const latO = numCoord(trip.latCliente) ?? numCoord(trip.latOrigen);
   const lonO = numCoord(trip.lonCliente) ?? numCoord(trip.lonOrigen);
@@ -224,6 +245,11 @@ function assertTripCoordsAndPrecio(trip: AnyMap): void {
   if (latD != null && lonD != null) {
     trip.latDestino = round6(latD);
     trip.lonDestino = round6(lonD);
+  }
+  if (latO != null && lonO != null && latD != null && lonD != null) {
+    trip.origenGeoPoint = new GeoPoint(round6(latO), round6(lonO));
+    trip.destinoGeoPoint = new GeoPoint(round6(latD), round6(lonD));
+    ensureRutaPuntosSnapshot(trip, latO, lonO, latD, lonD);
   }
 }
 
@@ -296,6 +322,8 @@ function sanitizeTrip(raw: AnyMap, viajeId: string, uid: string): AnyMap {
         out.multiparadaLegsTotal = legsTotal;
         out.multiparadaLegCompletadas = 0;
         out.multiparadaParadasVisitadas = [];
+        out.multiparadaParadasAbiertas = [];
+        out.multiparadaRecogidaAbierta = false;
         out.multiparadaCompleta = false;
       }
     }
@@ -306,90 +334,105 @@ function sanitizeTrip(raw: AnyMap, viajeId: string, uid: string): AnyMap {
   out.updatedAt = FieldValue.serverTimestamp();
   out.actualizadoEn = FieldValue.serverTimestamp();
 
+  const pin = onlyDigits(out.codigoVerificacion);
+  if (pin.length !== 6) {
+    out.codigoVerificacion = String(100000 + Math.floor(Math.random() * 900000));
+    out.codigoVerificado = false;
+  }
+
   return out;
 }
 
 export const crearViajePendienteCliente = onCall(async (request) => {
-  if (!request.auth?.uid) {
-    throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
-  }
-  assertClienteCuentaReal(request);
-  const uid = request.auth.uid;
-  const payload = (request.data ?? {}) as AnyMap;
-  const viajeId = trimOrEmpty(payload.viajeId);
-  const tripRaw = payload.trip;
-  if (!viajeId || !tripRaw || typeof tripRaw !== "object") {
-    throw new HttpsError("invalid-argument", "Faltan datos del viaje.");
-  }
+  try {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+    }
+    assertClienteCuentaReal(request);
+    const uid = request.auth.uid;
+    const payload = (request.data ?? {}) as AnyMap;
+    const viajeId = trimOrEmpty(payload.viajeId);
+    const tripRaw = payload.trip;
+    if (!viajeId || !tripRaw || typeof tripRaw !== "object") {
+      throw new HttpsError("invalid-argument", "Faltan datos del viaje.");
+    }
 
-  const trip = sanitizeTrip(tripRaw as AnyMap, viajeId, uid);
-  const nuevoEsAhora = trip.esAhora === true;
-  const viajeRef = db().collection("viajes").doc(viajeId);
-  const userRef = db().collection("usuarios").doc(uid);
+    const trip = sanitizeTrip(tripRaw as AnyMap, viajeId, uid);
+    const nuevoEsAhora = trip.esAhora === true;
+    const viajeRef = db().collection("viajes").doc(viajeId);
+    const userRef = db().collection("usuarios").doc(uid);
 
-  await db().runTransaction(async (tx) => {
-    const userSnap = await tx.get(userRef);
-    const userData = (userSnap.data() ?? {}) as AnyMap;
-    if (userData.tieneCobroViajePendiente === true) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
+    await db().runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const userData = (userSnap.data() ?? {}) as AnyMap;
+      if (userData.tieneCobroViajePendiente === true) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
+        );
+      }
+      const vid = trimOrEmpty(userData.viajeActivoId);
+      let viajeActivoDoc: AnyMap | null = null;
+      if (vid) {
+        const vSnap = await tx.get(db().collection("viajes").doc(vid));
+        if (vSnap.exists) {
+          viajeActivoDoc = (vSnap.data() ?? {}) as AnyMap;
+          if (
+            clienteViajeExistenteBloqueaNuevoPedido(viajeActivoDoc, uid, nuevoEsAhora)
+          ) {
+            throw new HttpsError("failed-precondition", MSG_YA_ACTIVO);
+          }
+        }
+      }
+
+      let negocioCiudad = trimOrEmpty(userData.negocioReferidoCiudad);
+      const codigoRef = trimOrEmpty(userData.negocioReferidoCodigo).toUpperCase();
+      let negocioActivo = false;
+      if (codigoRef) {
+        const negSnap = await tx.get(db().collection("negocios_aliados").doc(codigoRef));
+        if (negSnap.exists) {
+          const negData = (negSnap.data() ?? {}) as AnyMap;
+          negocioActivo = negData.activo === true;
+          if (!negocioCiudad) {
+            negocioCiudad = trimOrEmpty(negData.ciudad);
+          }
+        }
+      }
+
+      const tripFinal = aplicarPromoNegocioAliadoEnTrip({
+        trip,
+        clienteData: userData,
+        negocioCiudad: negocioCiudad || undefined,
+        negocioActivo,
+      });
+
+      tx.set(viajeRef, tripFinal);
+      const userPatch = patchUsuarioTrasCrearViajeCliente({
+        uid,
+        nuevoViajeId: viajeId,
+        nuevoEsAhora,
+        userData,
+        viajeActivoDoc,
+      });
+      tx.set(
+        userRef,
+        {
+          viajeActivoId: userPatch.viajeActivoId,
+          siguienteViajeId: userPatch.siguienteViajeId,
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
       );
-    }
-    const vid = trimOrEmpty(userData.viajeActivoId);
-    let viajeActivoDoc: AnyMap | null = null;
-    if (vid) {
-      const vSnap = await tx.get(db().collection("viajes").doc(vid));
-      if (vSnap.exists) {
-        viajeActivoDoc = (vSnap.data() ?? {}) as AnyMap;
-        if (
-          clienteViajeExistenteBloqueaNuevoPedido(viajeActivoDoc, uid, nuevoEsAhora)
-        ) {
-          throw new HttpsError("failed-precondition", MSG_YA_ACTIVO);
-        }
-      }
-    }
-
-    let negocioCiudad = trimOrEmpty(userData.negocioReferidoCiudad);
-    const codigoRef = trimOrEmpty(userData.negocioReferidoCodigo).toUpperCase();
-    let negocioActivo = false;
-    if (codigoRef) {
-      const negSnap = await tx.get(db().collection("negocios_aliados").doc(codigoRef));
-      if (negSnap.exists) {
-        const negData = (negSnap.data() ?? {}) as AnyMap;
-        negocioActivo = negData.activo === true;
-        if (!negocioCiudad) {
-          negocioCiudad = trimOrEmpty(negData.ciudad);
-        }
-      }
-    }
-
-    const tripFinal = aplicarPromoNegocioAliadoEnTrip({
-      trip,
-      clienteData: userData,
-      negocioCiudad: negocioCiudad || undefined,
-      negocioActivo,
     });
 
-    tx.set(viajeRef, tripFinal);
-    const userPatch = patchUsuarioTrasCrearViajeCliente({
-      uid,
-      nuevoViajeId: viajeId,
-      nuevoEsAhora,
-      userData,
-      viajeActivoDoc,
-    });
-    tx.set(
-      userRef,
-      {
-        viajeActivoId: userPatch.viajeActivoId,
-        siguienteViajeId: userPatch.siguienteViajeId,
-        updatedAt: FieldValue.serverTimestamp(),
-        actualizadoEn: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
+    return { viajeId, ok: true };
+  } catch (e) {
+    if (e instanceof HttpsError) throw e;
+    console.error("[crearViajePendienteCliente]", e);
+    throw new HttpsError(
+      "internal",
+      "No se pudo crear el viaje. Intenta de nuevo.",
     );
-  });
-
-  return { viajeId, ok: true };
+  }
 });

@@ -11,6 +11,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:flygo_nuevo/servicios/gps_service.dart';
+import 'package:flygo_nuevo/utils/rai_live_marker_animator.dart';
 import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/widgets/rai_map_vehicle_icons.dart';
 import 'package:flygo_nuevo/widgets/rai_ubicacion_activar_button.dart';
@@ -57,6 +58,9 @@ class MapaTiempoReal extends StatefulWidget {
   /// Capa de tráfico en vivo (tapones / congestión) — Google Maps.
   final bool mostrarTrafico;
 
+  /// Cuando el taxista navega: encuadra vehículo + este punto (cliente o destino).
+  final LatLng? puntoNavegacion;
+
   const MapaTiempoReal({
     super.key,
     this.origen,
@@ -77,17 +81,21 @@ class MapaTiempoReal extends StatefulWidget {
     this.estiloCalleAnchaBlanca = false,
     this.suprimirBannerUbicacionLocal = false,
     this.mostrarTrafico = true,
+    this.puntoNavegacion,
   });
 
   @override
   State<MapaTiempoReal> createState() => _MapaTiempoRealState();
 }
 
-class _MapaTiempoRealState extends State<MapaTiempoReal> {
+class _MapaTiempoRealState extends State<MapaTiempoReal>
+    with SingleTickerProviderStateMixin {
   GoogleMapController? _map;
   final fm.MapController _fmCtrl = fm.MapController();
   StreamSubscription<Position>? _posSub;
   Timer? _markerRefreshDebounce;
+  static const String _kTaxistaAnimId = 'taxista_live';
+  late final RaiLiveMarkerAnimator _taxistaAnim;
 
   static const LatLng _fallback = LatLng(18.4861, -69.9312); // Santo Domingo
   final Set<Marker> _markers = <Marker>{};
@@ -130,6 +138,17 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
   @override
   void initState() {
     super.initState();
+    _taxistaAnim = RaiLiveMarkerAnimator(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+      onTick: () {
+        if (!mounted) return;
+        _scheduleMarkerRefresh();
+        if (widget.esCliente && widget.mostrarTaxista && _following) {
+          _seguirVistaClienteAnimada();
+        }
+      },
+    );
     unawaited(RaiMapVehicleIcons.ensureLoaded().then((_) {
       if (mounted) _actualizarMarcadores();
     }));
@@ -169,8 +188,20 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     if (taxiChanged && (widget.mostrarTaxista || _usaUbicacionTaxistaPasiva)) {
       final LatLng? nuevo = widget.ubicacionTaxista;
       if (nuevo != null) {
-        final b = RaiMapVehicleIcons.bearingEntre(_prevVehicleLatLng, nuevo);
-        if (b != null) _lastBearing = b;
+        if (widget.mostrarTaxista && widget.esCliente) {
+          final double? nuevoBearing =
+              RaiMapVehicleIcons.bearingEntre(_prevVehicleLatLng, nuevo);
+          _taxistaAnim.syncTargets(
+            <String, LatLng>{_kTaxistaAnimId: nuevo},
+            headings: <String, double?>{
+              _kTaxistaAnimId: nuevoBearing ?? _lastBearing,
+            },
+          );
+          if (nuevoBearing != null) _lastBearing = nuevoBearing;
+        } else {
+          final b = RaiMapVehicleIcons.bearingEntre(_prevVehicleLatLng, nuevo);
+          if (b != null) _lastBearing = b;
+        }
         _prevVehicleLatLng = nuevo;
       }
       if (_usaUbicacionTaxistaPasiva) {
@@ -198,6 +229,7 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     _mapGestureEndDebounce?.cancel();
     _markerRefreshDebounce?.cancel();
     _posSub?.cancel();
+    _taxistaAnim.dispose();
     _map?.dispose();
     super.dispose();
   }
@@ -319,10 +351,17 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
 
     // Marcador del taxista (vista cliente)
     if (widget.mostrarTaxista && widget.ubicacionTaxista != null) {
+      final LatLng raw = widget.ubicacionTaxista!;
+      final LatLng pos = widget.esCliente
+          ? _taxistaAnim.position(_kTaxistaAnimId, raw)
+          : raw;
+      final double bearing = widget.esCliente
+          ? _taxistaAnim.bearing(_kTaxistaAnimId, fallback: _lastBearing)
+          : _lastBearing;
       _markers.add(vehiculoMarker(
         id: 'taxista',
-        position: widget.ubicacionTaxista!,
-        bearing: _lastBearing,
+        position: pos,
+        bearing: bearing,
         vistaCliente: true,
         title: 'Tu taxista',
       ));
@@ -493,13 +532,72 @@ class _MapaTiempoRealState extends State<MapaTiempoReal> {
     _scheduleMarkerRefresh();
 
     if (_following && (widget.esTaxista || kIsWeb)) {
-      _animateTo(
-        here,
-        zoom: RaiMapPresentation.followZoomDriver,
-        bearing: widget.esTaxista ? _lastBearing : null,
-        tilt: widget.esTaxista ? 32 : 0,
-        followMode: true,
+      final LatLng? nav = widget.puntoNavegacion;
+      if (widget.esTaxista && _coordsValid(nav) && _coordsValid(here)) {
+        unawaited(_fitNavigationCamera(<LatLng>[here, nav!]));
+      } else {
+        _animateTo(
+          here,
+          zoom: RaiMapPresentation.followZoomDriver,
+          bearing: widget.esTaxista ? _lastBearing : null,
+          tilt: widget.esTaxista ? 32 : 0,
+          followMode: true,
+        );
+      }
+    }
+  }
+
+  void _seguirVistaClienteAnimada() {
+    if (!_mapReady || !_following) return;
+    if (!widget.esCliente || !widget.mostrarTaxista) return;
+    final LatLng? taxi = widget.ubicacionTaxista;
+    if (!_coordsValid(taxi)) return;
+    final LatLng pos = _taxistaAnim.position(_kTaxistaAnimId, taxi!);
+    final List<LatLng> pts = <LatLng>[pos];
+    if (_coordsValid(widget.origen)) pts.add(widget.origen!);
+    if (_coordsValid(widget.destino)) pts.add(widget.destino!);
+    if (pts.length < 2) {
+      _animateTo(pos, zoom: RaiMapPresentation.followZoomDriver, followMode: true);
+      return;
+    }
+    unawaited(_fitNavigationCamera(pts));
+  }
+
+  Future<void> _fitNavigationCamera(List<LatLng> pts) async {
+    if (!_mapReady || pts.length < 2) return;
+    final now = DateTime.now();
+    if (now.difference(_lastAnim) < const Duration(milliseconds: 520)) {
+      return;
+    }
+    final LatLngBounds bounds = RaiMapPresentation.boundsFromPoints(pts);
+    if (kIsWeb) {
+      try {
+        _fmCtrl.fitCamera(
+          fm.CameraFit.bounds(
+            bounds: fm.LatLngBounds(
+              ll.LatLng(bounds.southwest.latitude, bounds.southwest.longitude),
+              ll.LatLng(bounds.northeast.latitude, bounds.northeast.longitude),
+            ),
+            padding: const EdgeInsets.all(72),
+          ),
+        );
+        _lastAnim = now;
+      } catch (_) {}
+      return;
+    }
+    final GoogleMapController? c = _map;
+    if (c == null) return;
+    _programmaticCameraDepth++;
+    try {
+      await RaiMapPresentation.fitBounds(
+        c,
+        bounds,
+        padding: 108,
+        maxZoom: RaiMapPresentation.maxZoomTrip,
       );
+      _lastAnim = now;
+    } catch (_) {
+      if (_programmaticCameraDepth > 0) _programmaticCameraDepth--;
     }
   }
 

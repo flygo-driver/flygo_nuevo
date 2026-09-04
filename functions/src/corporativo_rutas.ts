@@ -139,6 +139,8 @@ function aplicarCamposMultiparadaCorporativo(
   if (opts?.preservarProgreso !== true) {
     trip.multiparadaLegCompletadas = 0;
     trip.multiparadaParadasVisitadas = [];
+    trip.multiparadaParadasAbiertas = [];
+    trip.multiparadaRecogidaAbierta = false;
     trip.multiparadaCompleta = false;
   }
   trip.extras = mergeExtrasCorporativo(baseExtras, extrasPatch);
@@ -1488,20 +1490,26 @@ export const scheduledCorporativoRutasFijas = onSchedule(
   async () => {
     const now = new Date();
     const keyHoy = hoyKey(now);
+    let lastEmpresaDoc: FirebaseFirestore.QueryDocumentSnapshot | undefined;
 
-    let empresasSnap: FirebaseFirestore.QuerySnapshot;
-    try {
-      empresasSnap = await db()
+    // Pagina todas las empresas activas (sin tope artificial de 40).
+    while (true) {
+      let empresasQ: FirebaseFirestore.Query = db()
         .collection("empresas_corporativas")
         .where("activa", "==", true)
-        .limit(40)
-        .get();
-    } catch (e) {
-      logger.error("scheduledCorporativoRutasFijas empresas", e);
-      return;
-    }
+        .limit(100);
+      if (lastEmpresaDoc) empresasQ = empresasQ.startAfter(lastEmpresaDoc);
 
-    for (const emp of empresasSnap.docs) {
+      let empresasSnap: FirebaseFirestore.QuerySnapshot;
+      try {
+        empresasSnap = await empresasQ.get();
+      } catch (e) {
+        logger.error("scheduledCorporativoRutasFijas empresas", e);
+        return;
+      }
+      if (empresasSnap.empty) break;
+
+      for (const emp of empresasSnap.docs) {
       const empresaId = emp.id;
       const empresaData = emp.data();
       if (!empresaContratoVigente(empresaData, now)) {
@@ -1809,6 +1817,10 @@ export const scheduledCorporativoRutasFijas = onSchedule(
           }
         }
       }
+    }
+
+      lastEmpresaDoc = empresasSnap.docs[empresasSnap.docs.length - 1];
+      if (empresasSnap.size < 100) break;
     }
   },
 );
@@ -4319,6 +4331,8 @@ async function reiniciarProgresoRutaCorpInformativa(
       corporativoParadaActualIdx: 0,
       multiparadaLegCompletadas: 0,
       multiparadaParadasVisitadas: [],
+      multiparadaParadasAbiertas: [],
+      multiparadaRecogidaAbierta: false,
       multiparadaCompleta: false,
       clienteAbordo: false,
       pickupConfirmadoEn: FieldValue.delete(),

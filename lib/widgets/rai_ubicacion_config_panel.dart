@@ -50,17 +50,19 @@ class _RaiUbicacionConfigPanelState extends State<RaiUbicacionConfigPanel>
   Future<void> _ensureYRefrescar() async {
     if (widget.rol == RaiUbicacionRol.cliente) {
       await RaiUbicacionClienteService.instance.ensureStarted();
+      await RaiUbicacionClienteService.instance.refrescar(forzar: true);
     } else {
       await RaiUbicacionTaxistaService.instance.ensureStarted();
+      await RaiUbicacionTaxistaService.instance.refrescar(forzar: true);
     }
-    await _refrescar();
+    if (mounted) setState(() {});
   }
 
   Future<void> _refrescar() async {
     if (widget.rol == RaiUbicacionRol.cliente) {
-      await RaiUbicacionClienteService.instance.refrescar();
+      await RaiUbicacionClienteService.instance.refrescar(forzar: true);
     } else {
-      await RaiUbicacionTaxistaService.instance.refrescar();
+      await RaiUbicacionTaxistaService.instance.refrescar(forzar: true);
     }
     if (mounted) setState(() {});
   }
@@ -90,6 +92,31 @@ class _RaiUbicacionConfigPanelState extends State<RaiUbicacionConfigPanel>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.rol == RaiUbicacionRol.cliente) {
+      return ValueListenableBuilder<RaiUbicacionClienteModo>(
+        valueListenable: RaiUbicacionClienteService.instance.modo,
+        builder: (context, _, __) {
+          return ValueListenableBuilder<String?>(
+            valueListenable:
+                RaiUbicacionClienteService.instance.feedbackSinUbicacion,
+            builder: (context, __, ___) => _buildCard(context),
+          );
+        },
+      );
+    }
+    return ValueListenableBuilder<RaiUbicacionTaxistaModo>(
+      valueListenable: RaiUbicacionTaxistaService.instance.modo,
+      builder: (context, _, __) {
+        return ValueListenableBuilder<String?>(
+          valueListenable:
+              RaiUbicacionTaxistaService.instance.feedbackSinUbicacion,
+          builder: (context, __, ___) => _buildCard(context),
+        );
+      },
+    );
+  }
+
+  Widget _buildCard(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final Color acento = _listo
         ? const Color(0xFF49F18B)

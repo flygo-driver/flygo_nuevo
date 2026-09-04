@@ -9,6 +9,8 @@ Future<void> showNavegacionWazeMapsSheet(
   String? gpsCoordinatesLine,
   bool showSinGpsBanner = false,
   String? footerHint,
+  bool wazeHabilitado = true,
+  bool compacto = false,
   required VoidCallback onWaze,
   required VoidCallback onMaps,
   VoidCallback? onCancel,
@@ -22,13 +24,14 @@ Future<void> showNavegacionWazeMapsSheet(
     ),
     builder: (ctx) {
       final bottomInset = MediaQuery.viewPaddingOf(ctx).bottom;
+      final bool mini = compacto;
       return SafeArea(
         top: false,
         child: Padding(
           padding: EdgeInsets.only(bottom: bottomInset),
           child: SingleChildScrollView(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
+              padding: EdgeInsets.fromLTRB(20, 10, 20, mini ? 14 : 20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -43,17 +46,19 @@ Future<void> showNavegacionWazeMapsSheet(
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: mini ? 12 : 16),
                   Text(
                     title,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: mini ? 16 : 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  if (addressLine != null && addressLine.trim().isNotEmpty) ...[
+                  if (!mini &&
+                      addressLine != null &&
+                      addressLine.trim().isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Text(
                       addressLine.trim(),
@@ -62,7 +67,9 @@ Future<void> showNavegacionWazeMapsSheet(
                       textAlign: TextAlign.center,
                     ),
                   ],
-                  if (footerHint != null && footerHint.trim().isNotEmpty) ...[
+                  if (!mini &&
+                      footerHint != null &&
+                      footerHint.trim().isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Text(
                       footerHint.trim(),
@@ -71,7 +78,8 @@ Future<void> showNavegacionWazeMapsSheet(
                       textAlign: TextAlign.center,
                     ),
                   ],
-                  if (tieneCoords &&
+                  if (!mini &&
+                      tieneCoords &&
                       gpsCoordinatesLine != null &&
                       gpsCoordinatesLine.isNotEmpty) ...[
                     const SizedBox(height: 8),
@@ -89,10 +97,11 @@ Future<void> showNavegacionWazeMapsSheet(
                       textAlign: TextAlign.center,
                     ),
                   ],
-                  if (showSinGpsBanner) ...[
+                  if (!mini && showSinGpsBanner) ...[
                     const SizedBox(height: 8),
                     const Text(
-                      'Sin GPS del punto: se abrirá búsqueda por dirección.',
+                      'Sin GPS del punto: usá Google Maps (búsqueda por dirección). '
+                      'Waze requiere coordenadas exactas.',
                       style: TextStyle(
                           color: Colors.orangeAccent,
                           fontSize: 12,
@@ -100,14 +109,16 @@ Future<void> showNavegacionWazeMapsSheet(
                       textAlign: TextAlign.center,
                     ),
                   ],
-                  const SizedBox(height: 22),
+                  SizedBox(height: mini ? 14 : 22),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        onWaze();
-                      },
+                      onPressed: wazeHabilitado
+                          ? () {
+                              Navigator.pop(ctx);
+                              onWaze();
+                            }
+                          : null,
                       icon: const Icon(Icons.waves, color: Colors.blue),
                       label: const Text(
                         'Waze',
@@ -117,13 +128,13 @@ Future<void> showNavegacionWazeMapsSheet(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: EdgeInsets.symmetric(vertical: mini ? 12 : 14),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  SizedBox(height: mini ? 8 : 12),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -140,21 +151,23 @@ Future<void> showNavegacionWazeMapsSheet(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: EdgeInsets.symmetric(vertical: mini ? 12 : 14),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      onCancel?.call();
-                    },
-                    child: const Text('Cancelar',
-                        style: TextStyle(color: Colors.white54)),
-                  ),
+                  if (!mini) ...[
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        onCancel?.call();
+                      },
+                      child: const Text('Cancelar',
+                          style: TextStyle(color: Colors.white54)),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -8,7 +8,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flygo_nuevo/design_system/rai_ds_colors.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
@@ -26,6 +25,7 @@ import 'package:flygo_nuevo/utils/hora_am_pm.dart';
 import 'package:flygo_nuevo/utils/pool_gira_banner_urls.dart';
 import 'package:flygo_nuevo/utils/pool_gira_contenido.dart';
 import 'package:flygo_nuevo/utils/pool_modo_publicacion.dart';
+import 'package:flygo_nuevo/utils/pool_gira_compartir_redes.dart';
 import 'package:flygo_nuevo/utils/pool_publicar_errores.dart';
 import 'package:flygo_nuevo/utils/pools_producto_copy.dart';
 import 'package:flygo_nuevo/servicios/rai_connectivity_service.dart';
@@ -505,28 +505,39 @@ $hashtags
       builder: (ctx) => AlertDialog(
         title: Text(tituloDlg),
         content: const Text(
-          'Compartí el enlace en WhatsApp, Instagram, Facebook u otras redes '
-          'para que los clientes vean tu banner y reserven cupos en RAI.',
+          'Compartí en WhatsApp, Facebook, Instagram o cualquier red. '
+          'El enlace abre RAI Pasajero en esta gira o lleva a descargar la app.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, 'despues'),
             child: const Text('Después'),
           ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, 'redes'),
+            icon: const Icon(Icons.share_rounded),
+            label: const Text('Compartir en redes'),
+          ),
           TextButton.icon(
             onPressed: () => Navigator.pop(ctx, 'whatsapp'),
             icon: const Icon(Icons.chat),
-            label: const Text('WhatsApp'),
-          ),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(ctx, 'redes'),
-            icon: const Icon(Icons.share_outlined),
-            label: const Text('Otras redes'),
+            label: const Text('WhatsApp chat'),
           ),
         ],
       ),
     );
     if (!mounted || accion == null || accion == 'despues') return;
+
+    if (accion == 'redes') {
+      final banner = _bannerUrls.isNotEmpty ? _bannerUrls.first : null;
+      await PoolGiraCompartirRedes.compartir(
+        context: context,
+        textoPromo: texto,
+        poolId: poolId,
+        bannerUrl: banner,
+      );
+      return;
+    }
 
     if (accion == 'whatsapp') {
       try {
@@ -544,11 +555,11 @@ $hashtags
       return;
     }
 
-    await Share.share(
-      texto,
-      subject: _servicioBadge.trim().isNotEmpty
-          ? _servicioBadge.trim()
-          : PoolsProductoCopy.promoTituloDefault,
+    await PoolGiraCompartirRedes.compartir(
+      context: context,
+      textoPromo: texto,
+      poolId: poolId,
+      bannerUrl: _bannerUrls.isNotEmpty ? _bannerUrls.first : null,
     );
   }
 

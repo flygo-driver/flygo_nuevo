@@ -10,8 +10,11 @@ class DirectionsResult {
   /// Distancia en kilómetros
   final double km;
 
-  /// Duración en segundos (usa duration_in_traffic si withTraffic=true)
+  /// Duración en segundos sin tráfico (suma de legs).
   final int seconds;
+
+  /// Duración con tráfico en vivo (si Google la devuelve).
+  final int? secondsInTraffic;
 
   /// Resumen de ruta que da Google (opcional)
   final String? summary;
@@ -29,6 +32,7 @@ class DirectionsResult {
   const DirectionsResult({
     required this.km,
     required this.seconds,
+    this.secondsInTraffic,
     this.summary,
     this.path,
     this.distanceText,
@@ -100,6 +104,8 @@ class DirectionsService {
       // Calcular totales sumando todos los legs
       double totalKm = 0;
       int totalSeconds = 0;
+      int totalSecondsInTraffic = 0;
+      var tieneTrafico = false;
       final List<double> segmentDistances = [];
 
       for (final leg in legs) {
@@ -108,6 +114,9 @@ class DirectionsService {
             (legMap['distance'] as Map?)?['value'] as num?;
         final num? durationSeconds =
             (legMap['duration'] as Map?)?['value'] as num?;
+        final num? durationTrafficSeconds = withTraffic
+            ? ((legMap['duration_in_traffic'] as Map?)?['value'] as num?)
+            : null;
 
         if (distanceMeters != null) {
           totalKm += distanceMeters / 1000.0;
@@ -116,6 +125,12 @@ class DirectionsService {
 
         if (durationSeconds != null) {
           totalSeconds += durationSeconds.toInt();
+        }
+        if (durationTrafficSeconds != null) {
+          totalSecondsInTraffic += durationTrafficSeconds.toInt();
+          tieneTrafico = true;
+        } else if (durationSeconds != null) {
+          totalSecondsInTraffic += durationSeconds.toInt();
         }
       }
 
@@ -138,6 +153,7 @@ class DirectionsService {
       return DirectionsResult(
         km: totalKm,
         seconds: totalSeconds,
+        secondsInTraffic: tieneTrafico ? totalSecondsInTraffic : null,
         summary: route0['summary'] as String?,
         path: path,
         distanceText: distanceText,

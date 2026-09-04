@@ -68,6 +68,147 @@ export async function ledgerComisionViajeEfectivoCf(
   });
 }
 
+function saldoReservadoGirasRdFromBilletera(data: Record<string, unknown>): number {
+  const v = data.saldoReservadoParaGiras;
+  if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
+  if (typeof v === "string") {
+    const n = Number.parseFloat(v);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  }
+  return 0;
+}
+
+function saldoDisponiblePrepagoRdFromBilletera(data: Record<string, unknown>): number {
+  const prep = numBilletera(data.saldoPrepagoComisionRd);
+  const res = saldoReservadoGirasRdFromBilletera(data);
+  return Math.max(0, Number.parseFloat((prep - res).toFixed(2)));
+}
+
+/**
+ * Debita comisión de viaje (efectivo / transferencia al conductor) en billetera + ledger.
+ * Idempotente vía movimientos_prepago/comision_viaje_{viajeId}.
+ */
+export async function debitarComisionViajePrepagoEnTx(
+  tx: Transaction,
+  params: {
+    uidTaxista: string;
+    viajeId: string;
+    comisionRd: number;
+    fuente: string;
+    billeData: Record<string, unknown>;
+    eximePrimerGratis?: boolean;
+    existingMovSnap?: DocumentSnapshot;
+  },
+): Promise<{
+  appliedNow: boolean;
+  alreadyHadLedger: boolean;
+  saldoPrepagoDespues: number;
+  comisionPendienteDespues: number;
+  primerGratis: boolean;
+}> {
+  const uid = params.uidTaxista.trim();
+  const vid = params.viajeId.trim();
+  const comision = Number(params.comisionRd);
+  if (!uid || !vid || !Number.isFinite(comision) || comision < 0) {
+    return {
+      appliedNow: false,
+      alreadyHadLedger: false,
+      saldoPrepagoDespues: numBilletera(params.billeData.saldoPrepagoComisionRd),
+      comisionPendienteDespues: numBilletera(params.billeData.comisionPendiente),
+      primerGratis: false,
+    };
+  }
+
+  const ledgerRef = comisionViajeEfectivoLedgerRef(uid, vid);
+  const movSnap = params.existingMovSnap ?? (await tx.get(ledgerRef));
+  if (movSnap.exists) {
+    return {
+      appliedNow: false,
+      alreadyHadLedger: true,
+      saldoPrepagoDespues: numBilletera(params.billeData.saldoPrepagoComisionRd),
+      comisionPendienteDespues: numBilletera(params.billeData.comisionPendiente),
+      primerGratis: false,
+    };
+  }
+
+  const billeRef = db().collection("billeteras_taxista").doc(uid);
+  const pendAntes = numBilletera(params.billeData.comisionPendiente);
+  let saldo = numBilletera(params.billeData.saldoPrepagoComisionRd);
+  const flag = params.billeData.primerViajeComisionGratisConsumido === true;
+  const saldoIni = saldo;
+  const exime = params.eximePrimerGratis === true;
+
+  if (!exime && !flag && pendAntes < 1e-6) {
+    await ledgerComisionViajeEfectivoCf(tx, {
+      uidTaxista: uid,
+      viajeId: vid,
+      fuente: params.fuente,
+      comisionTotalRd: comision,
+      pendienteAntes: pendAntes,
+      saldoPrepagoAntes: saldoIni,
+      pendienteDespues: pendAntes,
+      saldoPrepagoDespues: saldoIni,
+      primerEfectivoSinDescuento: true,
+      existingMovSnap: movSnap,
+    });
+    tx.set(
+      billeRef,
+      {
+        primerViajeComisionGratisConsumido: true,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    return {
+      appliedNow: true,
+      alreadyHadLedger: false,
+      saldoPrepagoDespues: saldoIni,
+      comisionPendienteDespues: pendAntes,
+      primerGratis: true,
+    };
+  }
+
+  let p = pendAntes;
+  const fromPend = Math.min(p, comision);
+  p = Number.parseFloat((p - fromPend).toFixed(2));
+  const rem = Number.parseFloat((comision - fromPend).toFixed(2));
+  const prepagoLibreIni = saldoDisponiblePrepagoRdFromBilletera(params.billeData);
+  const cubiertoPrepago = rem <= prepagoLibreIni ? rem : prepagoLibreIni;
+  const faltantePrepago = Number.parseFloat((rem - cubiertoPrepago).toFixed(2));
+  saldo = Number.parseFloat((saldo - cubiertoPrepago).toFixed(2));
+  p = Number.parseFloat((p + faltantePrepago).toFixed(2));
+
+  await ledgerComisionViajeEfectivoCf(tx, {
+    uidTaxista: uid,
+    viajeId: vid,
+    fuente: params.fuente,
+    comisionTotalRd: comision,
+    pendienteAntes: pendAntes,
+    saldoPrepagoAntes: saldoIni,
+    pendienteDespues: p,
+    saldoPrepagoDespues: saldo,
+    primerEfectivoSinDescuento: false,
+    existingMovSnap: movSnap,
+  });
+  tx.set(
+    billeRef,
+    {
+      comisionPendiente: p,
+      saldoPrepagoComisionRd: saldo,
+      primerViajeComisionGratisConsumido: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return {
+    appliedNow: true,
+    alreadyHadLedger: false,
+    saldoPrepagoDespues: saldo,
+    comisionPendienteDespues: p,
+    primerGratis: false,
+  };
+}
+
 export async function ledgerComisionBolaPuebloCf(
   tx: Transaction,
   params: {

@@ -1,9 +1,83 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 
 class ChatRepo {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  static void _log(String msg) {
+    // ignore: avoid_print
+    print('[CHAT] $msg');
+  }
+
+  static bool _esPermissionDenied(FirebaseException e) =>
+      e.code == 'permission-denied' || e.code == 'permission_denied';
+
+  /// Admin SDK: crea/actualiza chats/{viajeId} (evita permission-denied en cliente).
+  static Future<bool> _ensureChatViajeViaCloud(String viajeId) async {
+    final String v = viajeId.trim();
+    if (v.isEmpty) return false;
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('ensureChatViajeDoc');
+      await callable.call(<String, dynamic>{'viajeId': v});
+      _log('CF ensureChatViajeDoc ok viajeId=$v');
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      _log('ensureChatViajeDoc CF: ${e.code} ${e.message}');
+      if (e.code == 'not-found' || e.code == 'unimplemented') {
+        return false;
+      }
+      rethrow;
+    }
+  }
+
+  static Future<void> _ensureChatDocViaje(String viajeId) async {
+    final v = viajeId.trim();
+    if (v.isEmpty) return;
+    final cfOk = await _ensureChatViajeViaCloud(v);
+    if (cfOk) return;
+    try {
+      await ViajesRepo.ensureChatDocForViaje(v);
+    } on FirebaseException catch (e) {
+      if (!_esPermissionDenied(e)) rethrow;
+      _log('ensure local denied → retry CF ensureChatViajeDoc');
+      final ok = await _ensureChatViajeViaCloud(v);
+      if (!ok) rethrow;
+    }
+  }
+
+  /// Asegura `chats/{viajeId}` (CF primero). Uso en asignación admin / claim.
+  static Future<void> ensureViajeChatDoc(String viajeId) =>
+      _ensureChatDocViaje(viajeId);
+
+  /// Prepara chat de viaje: CF + participantes extra (corporativo) + resolve.
+  static Future<String> prepareViajeChat({
+    required String viajeId,
+    required String uidA,
+    required String uidB,
+    Set<String>? participantesExtra,
+  }) async {
+    final v = viajeId.trim();
+    if (participantesExtra != null && participantesExtra.length >= 2 && v.isNotEmpty) {
+      final cfOk = await _ensureChatViajeViaCloud(v);
+      try {
+        await ensureViajeChatParticipantes(
+          viajeId: v,
+          participantes: participantesExtra,
+        );
+      } on FirebaseException catch (e) {
+        if (!_esPermissionDenied(e)) rethrow;
+        if (!cfOk) {
+          await _ensureChatViajeViaCloud(v);
+        }
+      } catch (_) {
+        if (!cfOk) rethrow;
+      }
+    }
+    return resolveOrCreateChatId(uidA: uidA, uidB: uidB, viajeId: v.isEmpty ? null : v);
+  }
 
   static String _pairId(String a, String b) {
     a = a.trim();
@@ -68,12 +142,30 @@ class ChatRepo {
       );
     }
 
-    final ref = _db.collection('chats').doc(v);
+    final cfOk = await _ensureChatViajeViaCloud(v);
+    try {
+      await _mergeParticipantesChat(v, uids);
+    } on FirebaseException catch (e) {
+      if (!_esPermissionDenied(e)) rethrow;
+      if (!cfOk) {
+        final ok = await _ensureChatViajeViaCloud(v);
+        if (!ok) rethrow;
+      }
+      try {
+        await _mergeParticipantesChat(v, uids);
+      } on FirebaseException catch (e2) {
+        if (!_esPermissionDenied(e2)) rethrow;
+      }
+    }
+  }
+
+  static Future<void> _mergeParticipantesChat(String viajeId, Set<String> uids) async {
+    final ref = _db.collection('chats').doc(viajeId);
     final snap = await ref.get();
     if (!snap.exists) {
       await ref.set({
         'participantes': uids.toList(),
-        'viajeId': v,
+        'viajeId': viajeId,
         'lastMessage': '',
         'lastAt': FieldValue.serverTimestamp(),
         'creadoAt': FieldValue.serverTimestamp(),
@@ -87,14 +179,14 @@ class ChatRepo {
         : <String>{};
     final merged = <String>{...existentes, ...uids};
     if (merged.length == existentes.length &&
-        (snap.data()?['viajeId'] ?? '').toString() == v) {
+        (snap.data()?['viajeId'] ?? '').toString() == viajeId) {
       return;
     }
 
     await ref.set(
       {
         'participantes': merged.toList(),
-        'viajeId': v,
+        'viajeId': viajeId,
         'lastAt': FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),
@@ -124,13 +216,28 @@ class ChatRepo {
 
     // Mismo id que [ViajesRepo._ensureChatForTrip]: chats/{viajeId}
     if (v.isNotEmpty) {
-      await ViajesRepo.ensureChatDocForViaje(v);
+      final cfOk = await _ensureChatViajeViaCloud(v);
+      if (!cfOk) {
+        await _ensureChatDocViaje(v);
+      }
+      if (cfOk) {
+        _log('using trip chat via CF: $v');
+        return v;
+      }
       try {
         await _tryTouch(v);
-        debugPrint('[CHAT] using trip chat doc: $v');
+        _log('using trip chat doc: $v');
         return v;
       } on FirebaseException catch (e) {
-        debugPrint('[CHAT] touch trip chat "$v": ${e.code}');
+        _log('touch trip chat "$v": ${e.code}');
+        if (_esPermissionDenied(e)) {
+          final ok = await _ensureChatViajeViaCloud(v);
+          if (ok) {
+            _log('touch denied but CF ok, using: $v');
+            return v;
+          }
+          rethrow;
+        }
         if (e.code == 'not-found') {
           try {
             await _create(cid: v, uidA: uidA, uidB: uidB, viajeId: v);

@@ -92,7 +92,8 @@ abstract final class MultiparadaRutaHelper {
     return false;
   }
 
-  /// Ordena por `orden`, redondea coords y renumera 1…n.
+  /// 🔥 MEJORA: ahora NO elimina waypoints duplicados ni cercanos,
+  /// solo descarta coordenadas inválidas (null, NaN, 0,0).
   static List<Map<String, dynamic>> sanitizarWaypoints(
     List<Map<String, dynamic>> raw,
   ) {
@@ -100,7 +101,11 @@ abstract final class MultiparadaRutaHelper {
     for (final Map<String, dynamic> w in raw) {
       final double? lat = coordLat(w);
       final double? lon = coordLon(w);
-      if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+      // Solo descartar si lat o lon son nulos, no finitos, o exactamente 0,0
+      if (lat == null || lon == null) continue;
+      if (!lat.isFinite || !lon.isFinite) continue;
+      if (lat == 0 && lon == 0) continue;
+      // 🔥 Ya no verificamos duplicados ni cercanía; el usuario decide
       final int orden = (w['orden'] is num) ? (w['orden'] as num).toInt() : 0;
       parsed.add(<String, dynamic>{
         'lat': round6(lat),
@@ -244,5 +249,320 @@ abstract final class MultiparadaRutaHelper {
       out.add(seg);
     }
     return out;
+  }
+
+  /// Paradas intermedias (sin origen ni destino) para mapa, Waze y Google Maps.
+  static List<({double lat, double lon, String label})>
+      paradasIntermediasParaNavegacion({
+    required Map<String, dynamic> viajeData,
+    List<Map<String, dynamic>>? waypointsModel,
+  }) {
+    final List<({double lat, double lon, String label})> desdeRuta =
+        _paradasDesdeRutaPuntos(viajeData);
+    final List<({double lat, double lon, String label})> desdeWaypoints =
+        _paradasDesdeWaypoints(viajeData, waypointsModel);
+    final List<({double lat, double lon, String label})> fusionadas =
+        _fusionarParadasNavegacion(desdeRuta, desdeWaypoints);
+    if (fusionadas.isNotEmpty) return fusionadas;
+    return _paradasDesdeSegmentos(viajeData);
+  }
+
+  static List<({double lat, double lon, String label})> _paradasDesdeWaypoints(
+    Map<String, dynamic> viajeData,
+    List<Map<String, dynamic>>? waypointsModel,
+  ) {
+    final List<({double lat, double lon, String label})> out =
+        <({double lat, double lon, String label})>[];
+    final List<Map<String, dynamic>> wps =
+        waypointsModel != null && waypointsModel.isNotEmpty
+            ? sanitizarWaypoints(waypointsModel)
+            : waypointsDesdeDoc(viajeData);
+    for (final Map<String, dynamic> m in wps) {
+      final double? lat = coordLat(m);
+      final double? lon = coordLon(m);
+      if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+      final String label = normalizarLabel(
+        (m['label'] ?? '').toString(),
+        'Parada ${out.length + 1}',
+      );
+      out.add((lat: lat, lon: lon, label: label));
+    }
+    return out;
+  }
+
+  static List<({double lat, double lon, String label})> _paradasDesdeRutaPuntos(
+    Map<String, dynamic> viajeData,
+  ) {
+    final List<({double lat, double lon, String label})> out =
+        <({double lat, double lon, String label})>[];
+    final dynamic rp = _rutaPuntosDesdeViajeData(viajeData);
+    if (rp is! List) return out;
+    for (final dynamic item in rp) {
+      if (item is! Map) continue;
+      final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+      final String rol = (m['rol'] ?? '').toString().toLowerCase();
+      if (rol == 'origen' || rol == 'destino' || rol == 'destino_final') {
+        continue;
+      }
+      final double? lat = coordLat(m);
+      final double? lon = coordLon(m);
+      if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+      final String label = normalizarLabel(
+        (m['label'] ?? 'Parada').toString(),
+        'Parada ${out.length + 1}',
+      );
+      out.add((lat: lat, lon: lon, label: label));
+    }
+    return out;
+  }
+
+  static List<({double lat, double lon, String label})> _paradasDesdeSegmentos(
+    Map<String, dynamic> viajeData,
+  ) {
+    final List<({double lat, double lon, String label})> out =
+        <({double lat, double lon, String label})>[];
+    final dynamic raw = viajeData['segmentos'];
+    final dynamic ex = viajeData['extras'];
+    final List<dynamic> segs = raw is List
+        ? raw
+        : (ex is Map && ex['segmentos'] is List)
+            ? ex['segmentos'] as List
+            : <dynamic>[];
+    if (segs.length < 2) return out;
+    for (int i = 0; i < segs.length - 1; i++) {
+      final dynamic item = segs[i];
+      if (item is! Map) continue;
+      final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+      final double? lat = _coordField(m, 'latDestino');
+      final double? lon = _coordField(m, 'lonDestino');
+      if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+      final String label = normalizarLabel(
+        (m['destino'] ?? m['label'] ?? 'Parada ${out.length + 1}').toString(),
+        'Parada ${out.length + 1}',
+      );
+      out.add((lat: lat, lon: lon, label: label));
+    }
+    return out;
+  }
+
+  /// Por índice: prioriza [rutaPuntos] y rellena huecos con [waypoints].
+  static List<({double lat, double lon, String label})> _fusionarParadasNavegacion(
+    List<({double lat, double lon, String label})> desdeRuta,
+    List<({double lat, double lon, String label})> desdeWaypoints,
+  ) {
+    final int n = desdeRuta.length > desdeWaypoints.length
+        ? desdeRuta.length
+        : desdeWaypoints.length;
+    if (n == 0) return <({double lat, double lon, String label})>[];
+    final List<({double lat, double lon, String label})> out =
+        <({double lat, double lon, String label})>[];
+    for (int i = 0; i < n; i++) {
+      final ({double lat, double lon, String label})? r =
+          i < desdeRuta.length ? desdeRuta[i] : null;
+      final ({double lat, double lon, String label})? w =
+          i < desdeWaypoints.length ? desdeWaypoints[i] : null;
+      if (r != null && coordsValidas(r.lat, r.lon)) {
+        out.add(r);
+      } else if (w != null && coordsValidas(w.lat, w.lon)) {
+        out.add(w);
+      }
+    }
+    return out;
+  }
+
+  /// Origen / pickup con fallback a `latOrigen`/`lonOrigen` y `rutaPuntos`.
+  static ({double lat, double lon, String label})? origenParaNavegacion({
+    required Map<String, dynamic> viajeData,
+    required double latClienteModelo,
+    required double lonClienteModelo,
+    String labelOrigen = '',
+  }) {
+    if (coordsValidas(latClienteModelo, lonClienteModelo)) {
+      return (
+        lat: latClienteModelo,
+        lon: lonClienteModelo,
+        label: normalizarLabel(labelOrigen, 'Origen'),
+      );
+    }
+    final double? latOri = _coordField(viajeData, 'latOrigen');
+    final double? lonOri = _coordField(viajeData, 'lonOrigen');
+    if (latOri != null &&
+        lonOri != null &&
+        coordsValidas(latOri, lonOri)) {
+      return (
+        lat: latOri,
+        lon: lonOri,
+        label: normalizarLabel(labelOrigen, 'Origen'),
+      );
+    }
+    final dynamic rp = _rutaPuntosDesdeViajeData(viajeData);
+    if (rp is List) {
+      for (final dynamic item in rp) {
+        if (item is! Map) continue;
+        final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+        final String rol = (m['rol'] ?? '').toString().toLowerCase();
+        if (rol != 'origen') continue;
+        final double? lat = coordLat(m);
+        final double? lon = coordLon(m);
+        if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+        final String lbl = (m['label'] ?? labelOrigen).toString().trim();
+        return (
+          lat: lat,
+          lon: lon,
+          label: normalizarLabel(lbl, 'Origen'),
+        );
+      }
+    }
+    final dynamic geo = viajeData['origenGeoPoint'];
+    if (geo != null) {
+      try {
+        final dynamic lat = (geo as dynamic).latitude;
+        final dynamic lon = (geo as dynamic).longitude;
+        if (lat is num && lon is num) {
+          final double la = lat.toDouble();
+          final double lo = lon.toDouble();
+          if (coordsValidas(la, lo)) {
+            return (
+              lat: la,
+              lon: lo,
+              label: normalizarLabel(labelOrigen, 'Origen'),
+            );
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Destino final con fallback a `rutaPuntos` si `latDestino`/`lonDestino` vienen en 0.
+  static ({double lat, double lon, String label, bool esFinal})?
+      destinoFinalLegParaNavegacion({
+    required Map<String, dynamic> viajeData,
+    required double latDestinoModelo,
+    required double lonDestinoModelo,
+    String labelDestino = '',
+  }) {
+    if (coordsValidas(latDestinoModelo, lonDestinoModelo)) {
+      return (
+        lat: latDestinoModelo,
+        lon: lonDestinoModelo,
+        label: normalizarLabel(labelDestino, 'Destino final'),
+        esFinal: true,
+      );
+    }
+    final dynamic rp = _rutaPuntosDesdeViajeData(viajeData);
+    if (rp is! List) return null;
+    for (final dynamic item in rp.reversed) {
+      if (item is! Map) continue;
+      final Map<String, dynamic> m = Map<String, dynamic>.from(item);
+      final String rol = (m['rol'] ?? '').toString().toLowerCase();
+      if (rol != 'destino' && rol != 'destino_final') continue;
+      final double? lat = coordLat(m);
+      final double? lon = coordLon(m);
+      if (lat == null || lon == null || !coordsValidas(lat, lon)) continue;
+      final String lbl = (m['label'] ?? labelDestino).toString().trim();
+      return (
+        lat: lat,
+        lon: lon,
+        label: normalizarLabel(lbl, 'Destino final'),
+        esFinal: true,
+      );
+    }
+    final dynamic geoDest = viajeData['destinoGeoPoint'];
+    if (geoDest != null) {
+      try {
+        final dynamic lat = (geoDest as dynamic).latitude;
+        final dynamic lon = (geoDest as dynamic).longitude;
+        if (lat is num && lon is num) {
+          final double la = lat.toDouble();
+          final double lo = lon.toDouble();
+          if (coordsValidas(la, lo)) {
+            return (
+              lat: la,
+              lon: lo,
+              label: normalizarLabel(labelDestino, 'Destino final'),
+              esFinal: true,
+            );
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Orden de navegación multiparada: paradas → destino final.
+  static List<({double lat, double lon, String label, bool esFinal})>
+      legsNavegacionMultiparada({
+    required Map<String, dynamic> viajeData,
+    List<Map<String, dynamic>>? waypointsModel,
+    required double latDestinoModelo,
+    required double lonDestinoModelo,
+    String labelDestino = '',
+  }) {
+    final List<({double lat, double lon, String label, bool esFinal})> out =
+        <({double lat, double lon, String label, bool esFinal})>[];
+    for (final ({double lat, double lon, String label}) p
+        in paradasIntermediasParaNavegacion(
+      viajeData: viajeData,
+      waypointsModel: waypointsModel,
+    )) {
+      out.add((lat: p.lat, lon: p.lon, label: p.label, esFinal: false));
+    }
+    final ({double lat, double lon, String label, bool esFinal})? dest =
+        destinoFinalLegParaNavegacion(
+      viajeData: viajeData,
+      latDestinoModelo: latDestinoModelo,
+      lonDestinoModelo: lonDestinoModelo,
+      labelDestino: labelDestino,
+    );
+    if (dest != null) out.add(dest);
+    return out;
+  }
+
+  static dynamic _rutaPuntosDesdeViajeData(Map<String, dynamic> viajeData) {
+    final dynamic directo = viajeData['rutaPuntos'];
+    if (directo is List) return directo;
+    final dynamic ex = viajeData['extras'];
+    if (ex is Map) return ex['rutaPuntos'];
+    return null;
+  }
+
+  static double? _coordField(Map<String, dynamic> data, String key) {
+    final dynamic x = data[key];
+    if (x is num && x.isFinite) return x.toDouble();
+    final double? d = double.tryParse('$x');
+    if (d != null && d.isFinite) return d;
+    return null;
+  }
+
+  /// Documento mínimo para resolver paradas desde un [Viaje] en pantalla.
+  static Map<String, dynamic> viajeDocDesdeModelo({
+    List<Map<String, dynamic>>? waypoints,
+    Map<String, dynamic>? extras,
+    double latDestino = 0,
+    double lonDestino = 0,
+    String destino = '',
+    double latCliente = 0,
+    double lonCliente = 0,
+    List<dynamic>? rutaPuntos,
+    List<dynamic>? segmentos,
+  }) {
+    final Map<String, dynamic> ex =
+        extras != null ? Map<String, dynamic>.from(extras) : <String, dynamic>{};
+    final List<dynamic>? rp =
+        rutaPuntos ?? (ex['rutaPuntos'] is List ? ex['rutaPuntos'] as List : null);
+    final List<dynamic>? seg =
+        segmentos ?? (ex['segmentos'] is List ? ex['segmentos'] as List : null);
+    return <String, dynamic>{
+      if (waypoints != null) 'waypoints': waypoints,
+      'extras': ex,
+      if (rp != null) 'rutaPuntos': rp,
+      if (seg != null) 'segmentos': seg,
+      'latCliente': latCliente,
+      'lonCliente': lonCliente,
+      'latDestino': latDestino,
+      'lonDestino': lonDestino,
+      'destino': destino,
+    };
   }
 }

@@ -35,6 +35,7 @@ import 'package:flygo_nuevo/pantallas/admin/admin_negocios_aliados.dart';
 
 // ✅ Documentos / Usuarios / Reportes / Tarifas
 import 'package:flygo_nuevo/pantallas/admin/admin_centro_operaciones.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_mensajes_operaciones.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_home.dart';
 import 'package:flygo_nuevo/pantallas/admin/panel_finanzas.dart';
 import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
@@ -194,6 +195,17 @@ class AdminDrawer extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+        ),
+        ListTile(
+          leading: Icon(Icons.forum_outlined,
+              color: isLight ? Colors.orange.shade800 : Colors.orangeAccent),
+          title: Text('Mensajes de clientes',
+              style: titleStyle.copyWith(fontWeight: FontWeight.w600)),
+          subtitle: Text(
+            'Cliente sin conductor · espera en viaje',
+            style: subtleStyle,
+          ),
+          onTap: () => _push(context, const AdminMensajesOperacionesPage()),
         ),
         ListTile(
           leading: Icon(Icons.radar,

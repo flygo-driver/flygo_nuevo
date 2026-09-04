@@ -5,6 +5,8 @@ import { ledgerNegocioAliadoViajeGratisCreditoCf } from "./taxista_prepago_ledge
 export const NEGOCIO_ALIADO_PCT_TAXISTA = 15;
 export const NEGOCIO_ALIADO_PCT_NEGOCIO = 3;
 export const NEGOCIO_ALIADO_TOPE_GRATIS_CENTS = 60_000;
+/** Viajes pagados exigidos antes del gratis cuando el perfil no trae `negocioPromoMxKM`. */
+export const NEGOCIO_ALIADO_PROMO_M_DEFAULT = 5;
 
 type AnyMap = Record<string, unknown>;
 
@@ -76,6 +78,45 @@ export function promoNegocioAliadoVigente(clienteData: AnyMap): boolean {
   return true;
 }
 
+export const NEGOCIO_ALIADO_GRATIS_RECHAZO = {
+  sinPromoVigente: "promo_no_vigente",
+  codigoDistinto: "codigo_distinto_al_registrado",
+  contadorInsuficiente: "contador_insuficiente",
+} as const;
+
+export type NegocioAliadoGratisRechazo =
+  (typeof NEGOCIO_ALIADO_GRATIS_RECHAZO)[keyof typeof NEGOCIO_ALIADO_GRATIS_RECHAZO];
+
+/**
+ * ¿El cliente ganó de verdad el viaje gratis? Se mide contra el contador que
+ * vive en su perfil (solo el backend lo sube al finalizar cada viaje pagado),
+ * nunca contra los campos que la app escribió en el viaje.
+ */
+export function elegibilidadViajeGratisNegocioAliado(params: {
+  viajeData: AnyMap;
+  clienteData: AnyMap;
+}): { elegible: boolean; motivo: NegocioAliadoGratisRechazo | null; contador: number; m: number } {
+  const { viajeData, clienteData } = params;
+  const m = Math.max(1, Math.trunc(Number(clienteData.negocioPromoMxKM ?? NEGOCIO_ALIADO_PROMO_M_DEFAULT)));
+  const contador = Math.max(0, Math.trunc(Number(clienteData.negocioPromoContador ?? 0)));
+
+  if (!promoNegocioAliadoVigente(clienteData)) {
+    return { elegible: false, motivo: NEGOCIO_ALIADO_GRATIS_RECHAZO.sinPromoVigente, contador, m };
+  }
+
+  const codigoViaje = codigoNegocioAliadoDesdeViaje(viajeData);
+  const codigoCliente = String(clienteData.negocioReferidoCodigo ?? "").trim().toUpperCase();
+  if (!codigoViaje || codigoViaje !== codigoCliente) {
+    return { elegible: false, motivo: NEGOCIO_ALIADO_GRATIS_RECHAZO.codigoDistinto, contador, m };
+  }
+
+  if (contador < m) {
+    return { elegible: false, motivo: NEGOCIO_ALIADO_GRATIS_RECHAZO.contadorInsuficiente, contador, m };
+  }
+
+  return { elegible: true, motivo: null, contador, m };
+}
+
 function saldoPrepagoRdFromBilletera(data: AnyMap): number {
   const raw = data.saldoPrepagoComisionRd;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -84,7 +125,8 @@ function saldoPrepagoRdFromBilletera(data: AnyMap): number {
 }
 
 /**
- * 6.º viaje gratis QR: acredita prepago al taxista (RAI paga la ganancia neta).
+ * 6.º viaje gratis QR: RAI repone en recargas la ganancia neta que el taxista no
+ * cobró, para que quede igual que si el pasajero le hubiera pagado.
  * Idempotente vía ledger `negocio_aliado_gratis_{viajeId}` y flag en viaje.
  * Solo aplica si la promo del cliente sigue vigente (90 días).
  */
@@ -120,7 +162,29 @@ export async function acreditarPrepagoViajeGratisNegocioAliadoEnTx(params: {
   if (!params.clienteSnap?.exists) return noop;
 
   const clienteData = (params.clienteSnap.data() ?? {}) as AnyMap;
-  if (!promoNegocioAliadoVigente(clienteData)) return noop;
+
+  // RAI solo repone el viaje gratis si el cliente lo ganó según su propio contador.
+  const elegibilidad = elegibilidadViajeGratisNegocioAliado({
+    viajeData: params.viajeData,
+    clienteData,
+  });
+  if (!elegibilidad.elegible) {
+    console.warn(
+      "[negocioAliadoGratis] credito rechazado",
+      params.viajeId,
+      elegibilidad.motivo,
+      `contador=${elegibilidad.contador}/${elegibilidad.m}`,
+    );
+    return {
+      ...noop,
+      patchViaje: {
+        negocioAliadoGratisCreditoRechazado: true,
+        negocioAliadoGratisCreditoRechazoMotivo: elegibilidad.motivo,
+        negocioAliadoGratisCreditoRechazoContador: elegibilidad.contador,
+        negocioAliadoGratisCreditoRechazadoEn: FieldValue.serverTimestamp(),
+      },
+    };
+  }
 
   if (params.viajeData.negocioAliadoPrepagoAcreditado === true) {
     const creditoPrev = Number(params.viajeData.negocioAliadoPrepagoCreditoRd ?? 0);
@@ -133,7 +197,10 @@ export async function acreditarPrepagoViajeGratisNegocioAliadoEnTx(params: {
     };
   }
 
-  const creditoCents = Math.max(0, params.gananciaCents - params.precioCents);
+  const creditoCents = creditoViajeGratisNegocioAliadoCents({
+    gananciaCents: params.gananciaCents,
+    precioCents: params.precioCents,
+  });
   if (creditoCents < 1) return noop;
 
   const creditoRd = Number((creditoCents / 100).toFixed(2));
@@ -201,6 +268,39 @@ export async function acreditarPrepagoViajeGratisNegocioAliadoEnTx(params: {
 }
 
 /**
+ * Lo que RAI repone en recargas por el viaje gratis: la ganancia neta que el
+ * taxista dejó de cobrar. En estos viajes la comisión NO se debita del prepago
+ * (ver `aplicaCreditoPrepagoGratis` en finance.ts), así que reponer la tarifa
+ * completa le regalaría también la comisión.
+ */
+export function creditoViajeGratisNegocioAliadoCents(params: {
+  gananciaCents: number;
+  precioCents: number;
+}): number {
+  const ganancia = Number.isFinite(params.gananciaCents)
+    ? Math.max(0, Math.trunc(params.gananciaCents))
+    : 0;
+  const cobrado = Number.isFinite(params.precioCents)
+    ? Math.max(0, Math.trunc(params.precioCents))
+    : 0;
+  return Math.max(0, ganancia - cobrado);
+}
+
+/**
+ * Contador tras cerrar un viaje referido: el gratis lo reinicia, y quien ya llegó
+ * a la meta pero viajó fuera del pueblo conserva su premio (paga completo sin subir).
+ */
+export function contadorPromoTrasCierreNegocioAliado(params: {
+  contadorActual: number;
+  m: number;
+  esGratis: boolean;
+}): number {
+  if (params.esGratis) return 0;
+  if (params.contadorActual >= params.m) return params.contadorActual;
+  return params.contadorActual + 1;
+}
+
+/**
  * Tras finalizar viaje referido: contador cliente 5+1, viajesReferidos negocio, comisión 3%.
  * Idempotente con flag `negocioAliadoPromoContabilizado` en el viaje.
  */
@@ -223,24 +323,22 @@ export function aplicarCierreNegocioAliadoEnTx(params: {
 
   const m = Math.max(
     1,
-    Math.trunc(Number(clienteData.negocioPromoMxKM ?? 5)),
+    Math.trunc(Number(clienteData.negocioPromoMxKM ?? NEGOCIO_ALIADO_PROMO_M_DEFAULT)),
   );
   const contadorActual = Math.max(
     0,
     Math.trunc(Number(clienteData.negocioPromoContador ?? 0)),
   );
-  const esGratis = viajeData.negocioAliadoPromoGratis === true;
-  const contadorAlCrear = Math.trunc(Number(viajeData.negocioAliadoPromoContadorAlCrear ?? contadorActual));
-  const eraElegibleGratis = contadorAlCrear >= m;
-  // 6.º viaje inter-pueblo: paga completo y conserva contador en M.
-  let nuevoContador = contadorActual;
-  if (esGratis) {
-    nuevoContador = 0;
-  } else if (eraElegibleGratis && !esGratis) {
-    nuevoContador = contadorActual;
-  } else {
-    nuevoContador = contadorActual + 1;
-  }
+  // Solo cuenta como gratis si el contador del perfil lo respalda; si la app lo
+  // marcó sin haberlo ganado, el viaje se contabiliza como pagado normal.
+  const esGratis =
+    viajeData.negocioAliadoPromoGratis === true &&
+    elegibilidadViajeGratisNegocioAliado({ viajeData, clienteData }).elegible;
+  const nuevoContador = contadorPromoTrasCierreNegocioAliado({
+    contadorActual,
+    m,
+    esGratis,
+  });
 
   tx.set(
     clienteSnap.ref,

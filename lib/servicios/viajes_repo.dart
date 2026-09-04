@@ -20,10 +20,13 @@ import 'package:flygo_nuevo/servicios/corporativo_taxista_service.dart';
 import 'package:flygo_nuevo/servicios/cuenta_rol_perfil_guard.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/metodo_pago_viaje.dart';
+import 'package:flygo_nuevo/utils/pago_tarjeta_cliente_gate.dart';
 import 'package:flygo_nuevo/utils/trip_publish_windows.dart';
 import 'package:flygo_nuevo/servicios/analytics_rai.dart';
 import 'package:flygo_nuevo/utils/ux_log.dart';
+import 'package:flygo_nuevo/utils/viaje_codigo_verificacion_helper.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
+import 'package:flygo_nuevo/utils/bola_ahorro_pool_isolation.dart';
 import 'package:flygo_nuevo/config/plataforma_economia.dart';
 import 'package:flygo_nuevo/servicios/comision_viaje_pct_service.dart';
 import 'package:flygo_nuevo/servicios/taxista_operacion_gate.dart';
@@ -35,6 +38,8 @@ import 'package:flygo_nuevo/servicios/negocios_aliados_repo.dart';
 import 'package:flygo_nuevo/servicios/negocio_aliado_config.dart';
 import 'package:flygo_nuevo/servicios/negocio_aliado_promo_service.dart';
 import 'package:flygo_nuevo/servicios/pool_timbre_session_guard.dart';
+import 'package:flygo_nuevo/modelo/tarifas_tramos_config.dart';
+import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
 
 /// Diagnóstico solo en debug: en release no expone UIDs ni estado interno por logcat.
 void _viajesRepoDebugLog(String message) {
@@ -45,8 +50,13 @@ void _viajesRepoDebugLog(String message) {
 const String kMsgClienteYaTieneViajeActivo =
     'Ya tienes un viaje activo. Abre tu viaje en curso o espera a que termine antes de pedir otro.';
 
+/// Firestore rechazó guardar el viaje (cuenta, reglas o sesión).
 const String kMsgCrearViajeSinPermisoCliente =
-    'No se pudo crear el viaje. Cierra sesión, entrá de nuevo como pasajero e intentá otra vez.';
+    'No se pudo guardar el viaje. Revisá tu conexión, cerrá la app conductor si usás la misma cuenta e intentá otra vez.';
+
+/// Callable no desplegado / sin Blaze: el viaje no se guardó en el servidor.
+const String kMsgCrearViajeServidorNoDisponible =
+    'El servidor no está disponible para confirmar viajes. Activá facturación (Blaze) y desplegá Functions, o intentá más tarde.';
 
 /// Resultado de [ViajesRepo.promoverColaTrasFinalizarTaxista] (callable `promoverSiguienteViaje`).
 class PromoverColaTaxistaOutcome {
@@ -92,12 +102,269 @@ class ViajesRepo {
 
   /// Devuelve un PIN de 6 dígitos; si el documento ya tiene uno válido, lo conserva.
   static String codigoVerificacionSeisDigitosDesdeDoc(Map<String, dynamic> d) {
-    final String s = (d['codigoVerificacion'] ?? d['codigo_verificacion'] ?? '')
-        .toString()
-        .replaceAll(RegExp(r'\D'), '');
-    if (s.length == 6) return s;
-    return (100000 + (DateTime.now().millisecondsSinceEpoch % 900000))
-        .toString();
+    final String? existente = ViajeCodigoVerificacionHelper.pinExistenteEnMap(d);
+    if (existente != null) return existente;
+    return ViajeCodigoVerificacionHelper.generarPinSeisDigitos();
+  }
+
+  static String? _pinExistenteEnMap(Map<String, dynamic>? data) =>
+      ViajeCodigoVerificacionHelper.pinExistenteEnMap(data);
+
+  static Future<String?> _escribirPinEnViajeSiAutorizado({
+    required DocumentReference<Map<String, dynamic>> ref,
+    required Map<String, dynamic> d,
+    required String uid,
+  }) async {
+    final String uidCliente =
+        (d['uidCliente'] ?? d['clienteId'] ?? '').toString().trim();
+    final String tid =
+        (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+    // Solo el pasajero dueño puede sembrar su PIN si falta (las reglas ya no dejan
+    // al chofer tocar `codigoVerificacion*`), y siempre con `codigoVerificado: false`.
+    final bool esCliente = uidCliente.isNotEmpty && uidCliente == uid;
+    if (!esCliente || tid.isEmpty) return null;
+
+    final String? ya = _pinExistenteEnMap(d);
+    if (ya != null) return ya;
+
+    final String pinNuevo = codigoVerificacionSeisDigitosDesdeDoc(d);
+    await ref.set(
+      <String, dynamic>{
+        'codigoVerificacion': pinNuevo,
+        'codigoVerificado': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    return pinNuevo;
+  }
+
+  /// Si el viaje no tiene PIN de 6 dígitos, lo crea en Firestore (cliente o taxista).
+  static Future<String?> ensureCodigoVerificacionViaje(String viajeId) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return null;
+
+    final DocumentReference<Map<String, dynamic>> ref = _col.doc(id);
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+
+    Future<String?> leerPin() async {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> cacheSnap =
+            await ref.get(const GetOptions(source: Source.cache));
+        if (cacheSnap.exists) {
+          final String? desdeCache = _pinExistenteEnMap(cacheSnap.data());
+          if (desdeCache != null) return desdeCache;
+        }
+      } catch (_) {}
+      try {
+        final Map<String, dynamic>? autoritativo =
+            await fetchViajeDocClienteAutoritativo(id);
+        if (autoritativo != null) {
+          final String? desdeAuth = _pinExistenteEnMap(autoritativo);
+          if (desdeAuth != null) return desdeAuth;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    final String? inicial = await leerPin();
+    if (inicial != null) return inicial;
+
+    const int maxIntentos = 3;
+    for (int intento = 0; intento < maxIntentos; intento++) {
+      try {
+        final HttpsCallable callable = FirebaseFunctions.instanceFor(
+          region: 'us-central1',
+        ).httpsCallable('ensureViajeCodigoVerificacion');
+        final HttpsCallableResult<dynamic> r =
+            await callable.call(<String, dynamic>{'viajeId': id});
+        final Object? raw = r.data;
+        if (raw is Map) {
+          final String pin = ViajeCodigoVerificacionHelper.soloDigitos(
+            (raw['pin'] ?? '').toString(),
+          );
+          if (pin.length == 6) return pin;
+        }
+      } catch (e) {
+        _viajesRepoDebugLog(
+          '⚠️ ensureViajeCodigoVerificacion CF (intento ${intento + 1}): $e',
+        );
+      }
+
+      final String? trasCf = await leerPin();
+      if (trasCf != null) return trasCf;
+
+      if (intento < maxIntentos - 1) {
+        await Future<void>.delayed(Duration(milliseconds: 400 * (intento + 1)));
+      }
+    }
+
+    if (uid == null || uid.isEmpty) return null;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await ref.get();
+      if (!snap.exists) return null;
+      return await _escribirPinEnViajeSiAutorizado(
+        ref: ref,
+        d: snap.data() ?? <String, dynamic>{},
+        uid: uid,
+      );
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ ensureCodigoVerificacion local: $e');
+      return await leerPin();
+    }
+  }
+
+  /// Lectura autoritativa del viaje para el cliente: Firestore servidor y, si
+  /// las reglas bloquean la lectura (`permission-denied`), Cloud Function.
+  static Future<Map<String, dynamic>?> fetchViajeDocClienteAutoritativo(
+    String viajeId, {
+    Map<String, dynamic>? base,
+  }) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return base;
+
+    try {
+      final DocumentReference<Map<String, dynamic>> ref = _col.doc(id);
+
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> snap =
+            await ref.get(const GetOptions(source: Source.server));
+        if (snap.exists) {
+          final Map<String, dynamic>? d = snap.data();
+          if (d != null && d.isNotEmpty) return d;
+        }
+      } on FirebaseException catch (e) {
+        if (e.code != 'permission-denied') {
+          _viajesRepoDebugLog('⚠️ fetchViajeDocClienteAutoritativo: $e');
+        }
+      } catch (e) {
+        final String s = e.toString().toLowerCase();
+        if (!s.contains('permission-denied')) {
+          _viajesRepoDebugLog('⚠️ fetchViajeDocClienteAutoritativo: $e');
+        }
+      }
+
+      Map<String, dynamic>? merged = await _fetchViajeClienteDesdeCallable(
+        id,
+        callableName: 'syncViajeEstadoCliente',
+        base: base,
+      );
+      if (merged != null && merged.isNotEmpty) return merged;
+
+      merged = await _fetchViajeClienteDesdeCallable(
+        id,
+        callableName: 'ensureViajeCodigoVerificacion',
+        base: base ?? merged,
+      );
+      return merged;
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ fetchViajeDocClienteAutoritativo: $e');
+      return base;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> _fetchViajeClienteDesdeCallable(
+    String viajeId, {
+    required String callableName,
+    Map<String, dynamic>? base,
+  }) async {
+    try {
+      final HttpsCallableResult<dynamic> r = await FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable(callableName).call(
+        <String, dynamic>{'viajeId': viajeId},
+      );
+      final Object? raw = r.data;
+      if (raw is! Map) return base;
+      final Map<String, dynamic> merged =
+          Map<String, dynamic>.from(base ?? <String, dynamic>{});
+      final String pin = ViajeCodigoVerificacionHelper.soloDigitos(
+        (raw['pin'] ?? '').toString(),
+      );
+      if (pin.length == 6) merged['codigoVerificacion'] = pin;
+      final String est = (raw['estado'] ?? '').toString().trim();
+      if (est.isNotEmpty) merged['estado'] = est;
+      if (raw['clienteAbordo'] == true) merged['clienteAbordo'] = true;
+      if (raw['codigoVerificado'] == true) {
+        merged['codigoVerificado'] = true;
+      } else if (raw['codigoVerificado'] == false) {
+        merged['codigoVerificado'] = false;
+      }
+      return merged.isEmpty ? base : merged;
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ $callableName: $e');
+      return base;
+    }
+  }
+
+  /// Viaje borrado en consola o ilegible por reglas: Firestore cliente suele devolver
+  /// `permission-denied` (no `exists=false`). El callable autoritativo confirma ausencia.
+  static Future<bool> viajeDocAusenteOInaccesibleParaCliente(
+    String viajeId,
+  ) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return true;
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await _col.doc(id).get(const GetOptions(source: Source.server));
+      if (!snap.exists) return true;
+      return false;
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied') {
+        print('[VIAJE_ACTIVO] viajeDocAusenteOInaccesible get: $e');
+        return false;
+      }
+    } catch (e) {
+      final String s = e.toString().toLowerCase();
+      if (!s.contains('permission-denied')) {
+        print('[VIAJE_ACTIVO] viajeDocAusenteOInaccesible get: $e');
+        return false;
+      }
+    }
+
+    try {
+      final HttpsCallableResult<dynamic> r =
+          await FirebaseFunctions.instanceFor(region: 'us-central1')
+              .httpsCallable('syncViajeEstadoCliente')
+              .call(<String, dynamic>{'viajeId': id})
+              .timeout(const Duration(seconds: 8));
+      final Object? raw = r.data;
+      if (raw is Map && raw['ok'] == true) {
+        return false;
+      }
+      print(
+        '[VIAJE_ACTIVO] viajeDocAusenteOInaccesible callable sin ok ($id)',
+      );
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'not-found') {
+        print(
+          '[VIAJE_ACTIVO] viajeDocAusenteOInaccesible callable → ausente ($id, ${e.code})',
+        );
+        return true;
+      }
+      print('[VIAJE_ACTIVO] viajeDocAusenteOInaccesible callable: $e');
+      return false;
+    } on TimeoutException {
+      print(
+        '[VIAJE_ACTIVO] viajeDocAusenteOInaccesible callable timeout ($id)',
+      );
+      return false;
+    } catch (e) {
+      print('[VIAJE_ACTIVO] viajeDocAusenteOInaccesible callable: $e');
+      return false;
+    }
+  }
+
+  /// Filtra matches de query/caché que ya no existen en servidor (viaje borrado en consola).
+  static Future<bool> viajeQueryMatchEsFantasmaParaCliente(
+    String viajeId,
+  ) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return true;
+    return viajeDocAusenteOInaccesibleParaCliente(id);
   }
 
   /// Si `config/encadenamiento_viajes.maxMetrosPickupDesdeDestinoActivo` > 0, al reservar siguiente
@@ -196,7 +463,9 @@ class ViajesRepo {
   static String uidClienteDesdeDocViaje(Map<String, dynamic> d) {
     final String u = (d['uidCliente'] ?? '').toString().trim();
     if (u.isNotEmpty) return u;
-    return (d['clienteId'] ?? '').toString().trim();
+    final String c = (d['clienteId'] ?? '').toString().trim();
+    if (c.isNotEmpty) return c;
+    return (d['uid'] ?? '').toString().trim();
   }
 
   /// Garantiza `usuarios/{uid}` con rol pasajero antes de crear en `viajes`
@@ -243,11 +512,192 @@ class ViajesRepo {
     }
   }
 
+  static dynamic _sanitizePersistValue(dynamic value, {int depth = 0}) {
+    if (depth > 14) return null;
+    if (value == null) return null;
+    if (value is FieldValue) return value;
+    if (value is Timestamp) return value;
+    if (value is DateTime) return value.toUtc().toIso8601String();
+    if (value is num) {
+      if (!value.isFinite) return null;
+      return value;
+    }
+    if (value is String || value is bool) return value;
+    if (value is List) {
+      final out = <dynamic>[];
+      for (final item in value) {
+        final v = _sanitizePersistValue(item, depth: depth + 1);
+        if (v != null) out.add(v);
+      }
+      return out;
+    }
+    if (value is Map) {
+      final out = <String, dynamic>{};
+      for (final e in value.entries) {
+        final k = e.key.toString().trim();
+        if (k.isEmpty) continue;
+        final v = _sanitizePersistValue(e.value, depth: depth + 1);
+        if (v != null) out[k] = v;
+      }
+      return out;
+    }
+    return value.toString();
+  }
+
+  static Map<String, dynamic> _stripTripCamposNoPermitidosEnCreateCliente(
+    Map<String, dynamic> data,
+  ) {
+    const forbidden = <String>{
+      'referenciaRecaudo',
+      'recaudoDestino',
+      'qrRecaudoPayload',
+      'qrRecaudoTipo',
+      'qrRecaudoVersion',
+      'qrRecaudoGeneradoEn',
+      'qrRecaudoEstado',
+      'pagoAzulId',
+      'payment',
+      'pagoRegistrado',
+      'liquidado',
+      'pagoDetalle',
+      'settlement',
+      'comision_cents',
+      'ganancia_cents',
+      'comision',
+      'comisionFlygo',
+      'gananciaTaxista',
+      'comisionCalculada',
+      'comisionCalculadaEn',
+      'confirmacionTransferencia',
+    };
+    final out = Map<String, dynamic>.from(data);
+    for (final k in forbidden) {
+      out.remove(k);
+    }
+    return out;
+  }
+
+  static Future<void> _limpiarSiguienteViajeIdUsuario(String uid) async {
+    await _db.collection('usuarios').doc(uid).set(
+      <String, dynamic>{
+        'siguienteViajeId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  static Future<void> _limpiarEnlacesViajeUsuarioParaPedirCliente(
+    String uid,
+  ) async {
+    await _db.collection('usuarios').doc(uid).set(
+      <String, dynamic>{
+        'viajeActivoId': '',
+        'siguienteViajeId': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'actualizadoEn': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  static Future<bool> _usuarioViajeActivoIdEs(
+    DocumentReference<Map<String, dynamic>> userRef,
+    String viajeId,
+  ) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await userRef.get();
+      final String vid =
+          (snap.data()?['viajeActivoId'] ?? '').toString().trim();
+      return vid == viajeId.trim();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> _vincularUsuarioTrasCrearViajeCliente({
+    required DocumentReference<Map<String, dynamic>> userRef,
+    required String uidCliente,
+    required String nuevoViajeId,
+    required bool nuevoEsAhora,
+    Map<String, dynamic>? viajeActivoDocPre,
+  }) async {
+    final DocumentSnapshot<Map<String, dynamic>> userSnap = await userRef.get();
+    final Map<String, dynamic> userData = userSnap.data() ?? <String, dynamic>{};
+    final Map<String, String> userPatch =
+        ViajePoolTaxistaGate.patchUsuarioTrasCrearViajeCliente(
+      uidCliente: uidCliente,
+      nuevoViajeId: nuevoViajeId,
+      nuevoEsAhora: nuevoEsAhora,
+      userData: userData,
+      viajeActivoDoc: viajeActivoDocPre,
+    );
+    final Map<String, dynamic> patch = <String, dynamic>{
+      'viajeActivoId': userPatch['viajeActivoId'],
+      'siguienteViajeId': userPatch['siguienteViajeId'],
+      'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    };
+    try {
+      await userRef.set(patch, SetOptions(merge: true));
+      if (await _usuarioViajeActivoIdEs(userRef, nuevoViajeId)) {
+        return true;
+      }
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied' && e.code != 'permission_denied') {
+        rethrow;
+      }
+      _viajesRepoDebugLog(
+        '⚠️ vincular usuario falló; intentando solo viajeActivoId ($nuevoViajeId)',
+      );
+    }
+    try {
+      await userRef.set(
+        <String, dynamic>{
+          'viajeActivoId': nuevoViajeId,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      if (await _usuarioViajeActivoIdEs(userRef, nuevoViajeId)) {
+        return true;
+      }
+    } catch (_) {
+      _viajesRepoDebugLog(
+        '⚠️ viaje $nuevoViajeId creado sin enlazar usuarios/$uidCliente',
+      );
+    }
+    return false;
+  }
+
+  static Map<String, dynamic> _sanitizeTripMap(Map<String, dynamic> data) {
+    final raw = _sanitizePersistValue(data);
+    if (raw is! Map) return Map<String, dynamic>.from(data);
+    return Map<String, dynamic>.from(raw);
+  }
+
+  static bool _callableCrearViajeReintentarLocal(FirebaseFunctionsException e) {
+    final code = e.code.toLowerCase().trim();
+    return code == 'not-found' ||
+        code == 'unimplemented' ||
+        code == 'unavailable' ||
+        code == 'deadline-exceeded' ||
+        code == 'internal' ||
+        code == 'aborted' ||
+        code == 'resource-exhausted';
+  }
+
   static dynamic _encodeTripFieldForCallable(dynamic value) {
     if (value is Timestamp) {
       return value.toDate().toUtc().toIso8601String();
     }
+    if (value is DateTime) {
+      return value.toUtc().toIso8601String();
+    }
     if (value is FieldValue) return null;
+    if (value is num && !value.isFinite) return null;
     if (value is List) {
       return value.map(_encodeTripFieldForCallable).toList();
     }
@@ -261,6 +711,67 @@ class ViajesRepo {
     return value;
   }
 
+  static Future<void> _prepararSesionClienteAntesCrearViaje(String uidCliente) async {
+    final String uid = uidCliente.trim();
+    if (uid.isEmpty) return;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> uSnap =
+          await _db.collection('usuarios').doc(uid).get();
+      final Map<String, dynamic> userData = uSnap.data() ?? <String, dynamic>{};
+      final String vid =
+          (userData['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isNotEmpty) {
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> vSnap =
+              await _col.doc(vid).get();
+          if (!vSnap.exists) {
+            await _limpiarEnlacesViajeUsuarioParaPedirCliente(uid);
+            return;
+          }
+          final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+          final String st =
+              EstadosViaje.normalizar((d['estado'] ?? '').toString());
+          final bool terminal =
+              d['completado'] == true || EstadosViaje.esTerminal(st);
+          final bool esViajeComoCliente = uidClienteDesdeDocViaje(d) == uid;
+          if (terminal || !esViajeComoCliente) {
+            await _limpiarEnlacesViajeUsuarioParaPedirCliente(uid);
+          }
+        } on FirebaseException catch (e) {
+          if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+            await _limpiarEnlacesViajeUsuarioParaPedirCliente(uid);
+          } else {
+            rethrow;
+          }
+        }
+      }
+
+      final String sid =
+          (userData['siguienteViajeId'] ?? '').toString().trim();
+      if (sid.isEmpty) return;
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> sSnap =
+            await _col.doc(sid).get();
+        if (!sSnap.exists) {
+          await _limpiarSiguienteViajeIdUsuario(uid);
+          return;
+        }
+        final Map<String, dynamic> sd = sSnap.data() ?? <String, dynamic>{};
+        final String st =
+            EstadosViaje.normalizar((sd['estado'] ?? '').toString());
+        if (sd['completado'] == true || EstadosViaje.esTerminal(st)) {
+          await _limpiarSiguienteViajeIdUsuario(uid);
+        }
+      } on FirebaseException catch (e) {
+        if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+          await _limpiarSiguienteViajeIdUsuario(uid);
+        }
+      }
+    } catch (_) {
+      /* best-effort: no bloquear crear viaje */
+    }
+  }
+
   static Future<void> _runViajePendienteTransaction({
     required DocumentReference<Map<String, dynamic>> doc,
     required Map<String, dynamic> data,
@@ -269,50 +780,161 @@ class ViajesRepo {
     required bool nuevoEsAhora,
     bool vincularUsuarioCliente = true,
   }) async {
-    await _db.runTransaction((tx) async {
-      if (vincularUsuarioCliente) {
-        final userSnap = await tx.get(userRef);
-        final Map<String, dynamic> userData =
-            userSnap.data() ?? <String, dynamic>{};
-        final vid =
-            (userData['viajeActivoId'] ?? '').toString().trim();
-        Map<String, dynamic>? viajeActivoDoc;
-        if (vid.isNotEmpty) {
-          final vSnap = await tx.get(_col.doc(vid));
+    Map<String, dynamic>? viajeActivoDocPre;
+
+    if (vincularUsuarioCliente) {
+      final DocumentSnapshot<Map<String, dynamic>> userSnap =
+          await userRef.get();
+      final Map<String, dynamic> userDataPre =
+          userSnap.data() ?? <String, dynamic>{};
+      final String vid =
+          (userDataPre['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isNotEmpty) {
+        try {
+          final DocumentSnapshot<Map<String, dynamic>> vSnap =
+              await _col.doc(vid).get();
           if (vSnap.exists) {
-            viajeActivoDoc = vSnap.data() ?? <String, dynamic>{};
+            viajeActivoDocPre = vSnap.data();
             if (ViajePoolTaxistaGate.clienteViajeExistenteBloqueaNuevoPedido(
-              viajeActivoDoc,
+              viajeActivoDocPre!,
               uidCliente,
               nuevoEsAhora: nuevoEsAhora,
             )) {
               throw StateError(kMsgClienteYaTieneViajeActivo);
             }
           }
+        } on FirebaseException catch (e) {
+          if (e.code == 'permission-denied' || e.code == 'permission_denied') {
+            await _limpiarViajeActivoIdTaxista(uidCliente);
+            viajeActivoDocPre = null;
+          } else {
+            rethrow;
+          }
         }
-        tx.set(doc, data);
-        final Map<String, String> userPatch =
-            ViajePoolTaxistaGate.patchUsuarioTrasCrearViajeCliente(
-          uidCliente: uidCliente,
-          nuevoViajeId: doc.id,
-          nuevoEsAhora: nuevoEsAhora,
-          userData: userData,
-          viajeActivoDoc: viajeActivoDoc,
-        );
-        tx.set(
-          userRef,
-          {
-            'viajeActivoId': userPatch['viajeActivoId'],
-            'siguienteViajeId': userPatch['siguienteViajeId'],
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-      } else {
-        tx.set(doc, data);
       }
-    });
+    }
+
+    final Map<String, dynamic>? viajeActivoDocTx = viajeActivoDocPre;
+
+    final Map<String, dynamic> tripPersist =
+        _stripTripCamposNoPermitidosEnCreateCliente(data);
+
+    await doc.set(tripPersist);
+
+    if (vincularUsuarioCliente) {
+      await _vincularUsuarioTrasCrearViajeCliente(
+        userRef: userRef,
+        uidCliente: uidCliente,
+        nuevoViajeId: doc.id,
+        nuevoEsAhora: nuevoEsAhora,
+        viajeActivoDocPre: viajeActivoDocTx,
+      );
+    }
+  }
+
+  static Future<void> _persistViajeSoloDocumentoViaje({
+    required DocumentReference<Map<String, dynamic>> doc,
+    required Map<String, dynamic> tripData,
+  }) async {
+    await doc.set(_stripTripCamposNoPermitidosEnCreateCliente(tripData));
+  }
+
+  static Future<void> _persistViajePendienteCliente({
+    required DocumentReference<Map<String, dynamic>> doc,
+    required Map<String, dynamic> tripData,
+    required String uidCliente,
+    required DocumentReference<Map<String, dynamic>> userRef,
+    required bool nuevoEsAhora,
+    required bool vincularUsuarioCliente,
+    required bool usarCallableCliente,
+  }) async {
+    bool docOk = false;
+    bool vinculoOk = !vincularUsuarioCliente;
+
+    try {
+      await _runViajePendienteTransaction(
+        doc: doc,
+        data: tripData,
+        uidCliente: uidCliente,
+        userRef: userRef,
+        nuevoEsAhora: nuevoEsAhora,
+        vincularUsuarioCliente: vincularUsuarioCliente,
+      );
+      docOk = true;
+      if (vincularUsuarioCliente) {
+        vinculoOk = await _usuarioViajeActivoIdEs(userRef, doc.id);
+      }
+    } on StateError {
+      rethrow;
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied' && e.code != 'permission_denied') {
+        rethrow;
+      }
+      _viajesRepoDebugLog(
+        '⚠️ crearViaje completo permission-denied; intentando solo documento viaje',
+      );
+      try {
+        await _persistViajeSoloDocumentoViaje(doc: doc, tripData: tripData);
+        docOk = true;
+        _viajesRepoDebugLog(
+          '✅ viaje ${doc.id} creado (fallback solo doc)',
+        );
+      } on FirebaseException catch (e2) {
+        if (e2.code != 'permission-denied' && e2.code != 'permission_denied') {
+          rethrow;
+        }
+      }
+      if (!docOk && !usarCallableCliente) {
+        throw StateError(kMsgCrearViajeSinPermisoCliente);
+      }
+      if (!docOk) {
+        _viajesRepoDebugLog(
+          '⚠️ crearViaje local permission-denied; intentando crearViajePendienteCliente CF',
+        );
+      }
+    }
+
+    if (docOk && vincularUsuarioCliente && !vinculoOk) {
+      vinculoOk = await _vincularUsuarioTrasCrearViajeCliente(
+        userRef: userRef,
+        uidCliente: uidCliente,
+        nuevoViajeId: doc.id,
+        nuevoEsAhora: nuevoEsAhora,
+      );
+    }
+
+    if (docOk && (!vincularUsuarioCliente || vinculoOk)) {
+      return;
+    }
+
+    if (!usarCallableCliente) {
+      throw StateError(kMsgCrearViajeSinPermisoCliente);
+    }
+
+    if (docOk && vincularUsuarioCliente && !vinculoOk) {
+      _viajesRepoDebugLog(
+        '⚠️ vinculo viajeActivoId falló; intentando crearViajePendienteCliente CF',
+      );
+    } else {
+      _viajesRepoDebugLog(
+        '⚠️ crearViaje local permission-denied; intentando crearViajePendienteCliente CF',
+      );
+    }
+
+    try {
+      await _persistViajePendienteClienteCallable(
+        viajeId: doc.id,
+        data: tripData,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      if (_callableCrearViajeReintentarLocal(e)) {
+        throw StateError(kMsgCrearViajeServidorNoDisponible);
+      }
+      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+        throw StateError(kMsgCrearViajeSinPermisoCliente);
+      }
+      rethrow;
+    }
   }
 
   static Future<void> _persistViajePendienteClienteCallable({
@@ -338,10 +960,41 @@ class ViajesRepo {
       if (e.code == 'failed-precondition' && msg.contains('viaje activo')) {
         throw StateError(kMsgClienteYaTieneViajeActivo);
       }
-      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
-        throw StateError(kMsgCrearViajeSinPermisoCliente);
-      }
       rethrow;
+    }
+  }
+
+  /// Tarifa equivalente del mismo trayecto para cada tipo de vehículo.
+  ///
+  /// Nunca puede tumbar la creación del viaje: si la cotización alternativa
+  /// falla, el viaje sale sin mapa y el precio pedido queda tal cual.
+  static Future<Map<String, int>> _preciosPorTipoVehiculoCents({
+    required double? distanciaKm,
+    required String tipoVehiculoPedido,
+    required int precioAcordadoCents,
+    required bool idaYVuelta,
+    Map<String, dynamic>? extras,
+  }) async {
+    if (distanciaKm == null || !distanciaKm.isFinite || distanciaKm <= 0) {
+      return const <String, int>{};
+    }
+    try {
+      final dynamic peajeRaw = extras?['peajeRd'] ?? extras?['peaje'];
+      final double peaje =
+          peajeRaw is num && peajeRaw.isFinite && peajeRaw > 0
+              ? peajeRaw.toDouble()
+              : 0.0;
+      return await TarifaServiceUnificado().cotizarNormalPorTipoVehiculoCents(
+        distanciaKm: distanciaKm,
+        tipoVehiculoPedido: tipoVehiculoPedido,
+        precioAcordadoCents: precioAcordadoCents,
+        idaVuelta: idaYVuelta,
+        peaje: peaje,
+        forzarTarifaUrbanaLocal: extras?['forzarTarifaUrbanaLocal'] == true,
+      );
+    } catch (e) {
+      _viajesRepoDebugLog('preciosPorTipoVehiculo falló: $e');
+      return const <String, int>{};
     }
   }
 
@@ -422,11 +1075,16 @@ class ViajesRepo {
         usuarioData['negocioReferidoCiudad'] = neg.ciudad.trim();
       }
     }
-    final promoAplicada = NegocioAliadoPromoService.aplicarAlCrearViaje(
+    final promoAplicada =
+        await NegocioAliadoPromoService.aplicarAlCrearViajeConUbicacion(
       usuario: usuarioData,
       precioNominalRd: precio,
       origen: origen,
       destino: destino,
+      latOrigen: latOrigen,
+      lonOrigen: lonOrigen,
+      latDestino: latDestino,
+      lonDestino: lonDestino,
     );
     var precioEfectivo = precio;
     if (promoAplicada != null) {
@@ -441,7 +1099,7 @@ class ViajesRepo {
 
     final int precioCents = (precioEfectivo * 100).round();
     await ComisionViajePctService.refresh();
-    final double pctComision = promoAplicada != null
+    final pctComision = promoAplicada != null
         ? NegocioAliadoConfig.pctComisionTaxistaReferido
         : ((comisionPorcentajeViaje != null &&
                 comisionPorcentajeViaje.isFinite &&
@@ -449,6 +1107,9 @@ class ViajesRepo {
                 comisionPorcentajeViaje <= 100)
             ? comisionPorcentajeViaje
             : PlataformaEconomia.comisionViajePorcentaje);
+    if (!pctComision.isFinite || pctComision < 0 || pctComision > 100) {
+      throw ArgumentError('Comisión inválida');
+    }
 
     final DateTime now = DateTime.now();
     final bool esAhora = forzarEsAhora ??
@@ -484,10 +1145,8 @@ class ViajesRepo {
 
     final String tipoSrvFinal =
         (tipoServicio ?? '').trim().isEmpty ? 'normal' : tipoServicio!.trim();
-    final String canalFinal = (canalAsignacion ?? '').trim().isEmpty
-        ? (tipoSrvFinal == 'turismo' ? 'admin' : 'pool')
-        : canalAsignacion!.trim();
 
+    late final String canalFinal;
     String tipoVehiculoFormateado = tipoVehiculo;
     if (tipoSrvFinal == 'motor') {
       tipoVehiculoFormateado = '🛵 MOTOR 🛵';
@@ -499,12 +1158,24 @@ class ViajesRepo {
       tipoVehiculoFormateado = '💚 AHORRA';
     }
 
-    String estadoInicial;
+    late final String estadoInicial;
     if (tipoSrvFinal == 'turismo') {
-      estadoInicial = 'pendiente_admin';
+      if (esAhora) {
+        // Mismo criterio que pool normal: visible de inmediato para choferes turismo.
+        canalFinal = AsignacionTurismoRepo.canalTurismoPool;
+        estadoInicial = EstadosViaje.pendiente;
+      } else {
+        canalFinal = 'admin';
+        estadoInicial = 'pendiente_admin';
+      }
     } else {
-      // Tarjeta: `pendiente_pago` hasta pasarela (cuando PayConfig active UI de tarjeta).
-      estadoInicial = MetodoPagoViaje.esTarjeta(metodoPago)
+      canalFinal = (canalAsignacion ?? '').trim().isEmpty
+          ? 'pool'
+          : canalAsignacion!.trim();
+      // Tarjeta + AZUL activo: `pendiente_pago`. Si AZUL aún no está en prod,
+      // guardamos Tarjeta como preferencia pero el viaje entra al pool normal.
+      estadoInicial = MetodoPagoViaje.esTarjeta(metodoPago) &&
+              PagoTarjetaClienteGate.cobroHabilitado
           ? EstadosViaje.pendientePago
           : EstadosViaje.pendiente;
     }
@@ -531,8 +1202,17 @@ class ViajesRepo {
       'lonOrigen': lonOrigen,
       'latDestino': latDestino,
       'lonDestino': lonDestino,
+      'origenGeoPoint': GeoPoint(latOrigen, lonOrigen),
+      'destinoGeoPoint': GeoPoint(latDestino, lonDestino),
       'sentido': idaYVuelta ? 'ida_y_vuelta' : 'solo_ida',
       'idaYVuelta': idaYVuelta,
+      // El cliente paga el recargo del regreso, así que el viaje no se puede
+      // cerrar en el destino de ida: o lo devuelven, o se le quita el recargo.
+      if (idaYVuelta && tipoSrvFinal != 'turismo') ...<String, dynamic>{
+        'regresoPendiente': true,
+        'regresoEnCurso': false,
+        'precioSoloIdaCents': (precioCents / 1.8).round(),
+      },
       'fechaHora': Timestamp.fromDate(fechaHora),
       'acceptAfter': Timestamp.fromDate(acceptAfterDT),
       'publishAt': Timestamp.fromDate(publishAtDT),
@@ -576,6 +1256,27 @@ class ViajesRepo {
       'actualizadoEn': FieldValue.serverTimestamp(),
     };
 
+    // El claim pisa `tipoVehiculo`/`tipoVehiculoOriginal` con los del chofer, así
+    // que lo pedido se guarda aparte junto con la tarifa equivalente de cada
+    // tipo: si acepta un vehículo más barato, el backend le cobra ese al cliente.
+    if (tipoSrvFinal == 'normal') {
+      final String tipoPedido =
+          TarifasTramosConfig.normalizarClaveVehiculo(tipoVehiculo);
+      if (tipoPedido.isNotEmpty) {
+        data['tipoVehiculoSolicitado'] = tipoPedido;
+        final Map<String, int> porTipo = await _preciosPorTipoVehiculoCents(
+          distanciaKm: distanciaKm,
+          tipoVehiculoPedido: tipoPedido,
+          precioAcordadoCents: precioCents,
+          idaYVuelta: idaYVuelta,
+          extras: extras,
+        );
+        if (porTipo.length > 1) {
+          data['preciosPorTipoVehiculoCents'] = porTipo;
+        }
+      }
+    }
+
     final wps = _sanitize(waypoints);
     if (wps != null) {
       data['waypoints'] = wps;
@@ -587,10 +1288,51 @@ class ViajesRepo {
         data['multiparadaLegsTotal'] = legsTotal;
         data['multiparadaLegCompletadas'] = 0;
         data['multiparadaParadasVisitadas'] = <Map<String, dynamic>>[];
+        data['multiparadaParadasAbiertas'] = <int>[];
+        data['multiparadaRecogidaAbierta'] = false;
         data['multiparadaCompleta'] = false;
       }
     }
-    if (extras != null && extras.isNotEmpty) data['extras'] = extras;
+    final dynamic rutaExistente = data['rutaPuntos'];
+    final bool sinRutaPuntos = rutaExistente is! List || rutaExistente.isEmpty;
+    if (sinRutaPuntos) {
+      data['rutaPuntos'] = MultiparadaRutaHelper.construirRutaPuntos(
+        latOrigen: latOrigen,
+        lonOrigen: lonOrigen,
+        labelOrigen: origen,
+        latDestino: latDestino,
+        lonDestino: lonDestino,
+        labelDestino: destino,
+        waypoints: wps ?? const <Map<String, dynamic>>[],
+      );
+    }
+    if (extras != null && extras.isNotEmpty) {
+      final cleanExtras = _sanitizeTripMap(extras);
+      if (cleanExtras.isNotEmpty) data['extras'] = cleanExtras;
+      // Multiparada: plan en raíz del viaje (taxista/cliente no dependen solo de extras).
+      final dynamic rutaPuntos = cleanExtras['rutaPuntos'];
+      if (rutaPuntos is List && rutaPuntos.isNotEmpty) {
+        data['rutaPuntos'] = rutaPuntos;
+      }
+      final dynamic segmentosMulti = cleanExtras['segmentos'];
+      if (segmentosMulti is List && segmentosMulti.isNotEmpty) {
+        data['segmentos'] = segmentosMulti;
+      }
+    }
+    if (data['extras'] is Map &&
+        (data['extras'] as Map)['precioBloqueado'] == true) {
+      data['precioBloqueado'] = true;
+      final cond = (data['extras'] as Map)['cotizacionCondiciones'];
+      if (cond is Map) {
+        data['cotizacionCondiciones'] = Map<String, dynamic>.from(cond);
+      }
+    } else if (extras?['precioBloqueado'] == true) {
+      data['precioBloqueado'] = true;
+      final cond = extras?['cotizacionCondiciones'];
+      if (cond is Map) {
+        data['cotizacionCondiciones'] = Map<String, dynamic>.from(cond);
+      }
+    }
     if (promoAplicada != null) {
       data.addAll(promoAplicada.campos);
     }
@@ -602,6 +1344,7 @@ class ViajesRepo {
     }
 
     await _ensurePerfilClienteOperativo(uidCliente);
+    await _prepararSesionClienteAntesCrearViaje(uidCliente);
     await FirebaseAuth.instance.currentUser?.getIdToken(true);
 
     final userRef = _db.collection('usuarios').doc(uidCliente);
@@ -611,41 +1354,25 @@ class ViajesRepo {
         isPasajeroCapableFlavor &&
         authUid == uidCliente.trim();
 
+    final Map<String, dynamic> tripData = _sanitizeTripMap(data);
+
     try {
-      if (usarCallableCliente) {
-        try {
-          await _persistViajePendienteClienteCallable(
-            viajeId: doc.id,
-            data: data,
-          );
-        } on FirebaseFunctionsException catch (e) {
-          if (e.code == 'not-found' || e.code == 'unimplemented') {
-            await _runViajePendienteTransaction(
-              doc: doc,
-              data: data,
-              uidCliente: uidCliente,
-              userRef: userRef,
-              nuevoEsAhora: esAhora,
-              vincularUsuarioCliente: vincularUsuarioCliente,
-            );
-          } else {
-            rethrow;
-          }
-        }
-      } else {
-        await _runViajePendienteTransaction(
-          doc: doc,
-          data: data,
-          uidCliente: uidCliente,
-          userRef: userRef,
-          nuevoEsAhora: esAhora,
-          vincularUsuarioCliente: vincularUsuarioCliente,
-        );
-      }
+      await _persistViajePendienteCliente(
+        doc: doc,
+        tripData: tripData,
+        uidCliente: uidCliente,
+        userRef: userRef,
+        nuevoEsAhora: esAhora,
+        vincularUsuarioCliente: vincularUsuarioCliente,
+        usarCallableCliente: usarCallableCliente,
+      );
     } on FirebaseFunctionsException catch (e) {
       if (e.code == 'failed-precondition' &&
           (e.message ?? '').toLowerCase().contains('viaje activo')) {
         throw StateError(kMsgClienteYaTieneViajeActivo);
+      }
+      if (_callableCrearViajeReintentarLocal(e)) {
+        throw StateError(kMsgCrearViajeServidorNoDisponible);
       }
       if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
         throw StateError(kMsgCrearViajeSinPermisoCliente);
@@ -662,7 +1389,13 @@ class ViajesRepo {
       await NotificationService.I.marcarViajePropioSinTimbre(doc.id);
     }
 
-    if (tipoSrvFinal == 'turismo' && turismoPublicarEnPool) {
+    _viajesRepoDebugLog(
+      '✅ crearViajePendiente OK viajeId=${doc.id} esAhora=$esAhora',
+    );
+
+    if (tipoSrvFinal == 'turismo' &&
+        turismoPublicarEnPool &&
+        canalFinal != AsignacionTurismoRepo.canalTurismoPool) {
       try {
         await AsignacionTurismoRepo.publicarViajeEnPoolTurismo(
           viajeId: doc.id,
@@ -714,9 +1447,9 @@ class ViajesRepo {
         tripDoc = await _col.doc(viajeActivoId).get();
       } on FirebaseException catch (e) {
         if (e.code == 'permission-denied' || e.code == 'permission_denied') {
-          await _limpiarViajeActivoIdTaxista(uidTaxista);
+          // No borrar viajeActivoId: suele ser transitorio (auth/cambio de app).
           _viajesRepoDebugLog(
-            '✅ ensureTaxistaLibre - limpiado (viajeActivoId sin lectura)',
+            '⚠️ ensureTaxistaLibre - sin lectura viaje (conservar viajeActivoId): $e',
           );
           return;
         }
@@ -767,6 +1500,93 @@ class ViajesRepo {
       'updatedAt': FieldValue.serverTimestamp(),
       'actualizadoEn': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  static bool _usuarioEsClienteEnDocViaje(
+    Map<String, dynamic> data,
+    String uid,
+  ) {
+    final String u = uid.trim();
+    if (u.isEmpty) return false;
+    return (data['uidCliente'] ?? '').toString().trim() == u ||
+        (data['clienteId'] ?? '').toString().trim() == u;
+  }
+
+  static bool viajeOperativoBloqueanteParaCliente(
+    Map<String, dynamic> data,
+    String uidCliente,
+  ) {
+    final String uid = uidCliente.trim();
+    if (uid.isEmpty) return false;
+    if (!_usuarioEsClienteEnDocViaje(data, uid)) return false;
+    if (data['completado'] == true) return false;
+    final String estado =
+        EstadosViaje.normalizar((data['estado'] ?? '').toString());
+    if (EstadosViaje.esTerminal(estado)) return false;
+    if (EstadosViaje.esPendiente(estado) ||
+        estado == EstadosViaje.pendientePago) {
+      return true;
+    }
+    return estado == EstadosViaje.aceptado ||
+        estado == EstadosViaje.enCaminoPickup ||
+        estado == EstadosViaje.aBordo ||
+        estado == EstadosViaje.enCurso;
+  }
+
+  /// Solo borra `viajeActivoId` si apunta a [viajeId] y ese doc ya no existe.
+  /// Seguro para cliente y taxista (no usa reglas de chofer).
+  static Future<void> limpiarViajeActivoIdSiViajeInexistente({
+    required String uid,
+    required String viajeId,
+  }) async {
+    final String u = uid.trim();
+    final String vid = viajeId.trim();
+    if (u.isEmpty || vid.isEmpty) return;
+    try {
+      final uSnap = await _db.collection('usuarios').doc(u).get();
+      final String activo =
+          (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (activo != vid) return;
+      final vSnap =
+          await _col.doc(vid).get(const GetOptions(source: Source.server));
+      if (vSnap.exists) return;
+      await _limpiarViajeActivoIdTaxista(u);
+      _viajesRepoDebugLog(
+        '✅ limpiarViajeActivoIdSiViajeInexistente uid=$u vid=$vid',
+      );
+    } catch (_) {}
+  }
+
+  /// Cliente: limpia `viajeActivoId` huérfano sin confundir con uid del taxista.
+  static Future<void> ensureClienteViajeActivoCoherente(String uidCliente) async {
+    final String uid = uidCliente.trim();
+    if (uid.isEmpty) return;
+    try {
+      final uSnap = await _db.collection('usuarios').doc(uid).get();
+      final String vid =
+          (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return;
+
+      final vSnap = await _col.doc(vid).get();
+      if (!vSnap.exists) {
+        await _limpiarViajeActivoIdTaxista(uid);
+        return;
+      }
+      final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+      if (!_usuarioEsClienteEnDocViaje(d, uid)) {
+        await _limpiarViajeActivoIdTaxista(uid);
+        return;
+      }
+      if (!viajeOperativoBloqueanteParaCliente(d, uid)) {
+        await _limpiarViajeActivoIdTaxista(uid);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> limpiarViajeActivoClienteSiNoOperativo(
+    String uidCliente,
+  ) async {
+    await ensureClienteViajeActivoCoherente(uidCliente);
   }
 
   static Future<void> ensureSiguienteCoherente(String uidTaxista) async {
@@ -876,7 +1696,7 @@ class ViajesRepo {
     final v = await _col.doc(viajeId).get();
     if (!v.exists) return;
     final d = v.data()!;
-    final String uidCli = (d['uidCliente'] ?? d['clienteId'] ?? '').toString();
+    final String uidCli = ViajesRepo.uidClienteDesdeDocViaje(d);
     final String uidTx = (d['uidTaxista'] ??
             d['taxistaId'] ??
             d['corporativoChoferAsignadoUid'] ??
@@ -1143,6 +1963,92 @@ class ViajesRepo {
     });
   }
 
+  /// Snapshot bancario del taxista en el viaje (paridad con `aceptarViajeSeguro` CF).
+  static Map<String, String> _snapshotPerfilTaxistaBanco(
+    Map<String, dynamic> uData,
+  ) {
+    return {
+      'bancoTaxista': (uData['banco'] ?? '').toString().trim(),
+      'numeroCuentaTaxista': (uData['numeroCuenta'] ?? '').toString().trim(),
+      'tipoCuentaTaxista': (uData['tipoCuenta'] ?? '').toString().trim(),
+      'titularCuentaTaxista':
+          (uData['titularCuenta'] ?? uData['titular'] ?? '').toString().trim(),
+      'ciTaxista': (uData['ciTaxista'] ?? uData['cedula'] ?? uData['cedulaTaxista'] ?? '')
+          .toString()
+          .trim(),
+    };
+  }
+
+  /// Si el callable falla por red/rol/servidor, seguir con transacción Firestore local.
+  static bool _claimCallablePermiteFallbackLocal(String? cfResult) {
+    if (cfResult == null || cfResult.isEmpty) return true;
+    if (cfResult == 'callable-no-disponible') return true;
+    if (cfResult.startsWith('permiso:')) return true;
+    return false;
+  }
+
+  static Future<void> _asegurarViajeActivoIdLegibleAntesClaim(
+    String uidTaxista,
+  ) async {
+    final uid = uidTaxista.trim();
+    if (uid.isEmpty) return;
+    try {
+      final uSnap = await _db.collection('usuarios').doc(uid).get();
+      final vid = (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+      if (vid.isEmpty) return;
+      try {
+        await _col.doc(vid).get(const GetOptions(source: Source.server));
+      } on FirebaseException catch (e) {
+        final c = e.code.toLowerCase();
+        if (c == 'permission-denied' || c == 'permission_denied') {
+          await _limpiarViajeActivoIdTaxista(uid);
+          _viajesRepoDebugLog(
+            '✅ viajeActivoId ilegible limpiado antes de claim ($vid)',
+          );
+        }
+      }
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ _asegurarViajeActivoIdLegibleAntesClaim: $e');
+    }
+  }
+
+  static Future<String?> _resolverViajeActivoAntesClaim({
+    required String uidTaxista,
+    required String viajeId,
+  }) async {
+    final uSnap = await _db.collection('usuarios').doc(uidTaxista).get();
+    final viajeActivoId =
+        (uSnap.data()?['viajeActivoId'] ?? '').toString().trim();
+    if (viajeActivoId.isEmpty || viajeActivoId == viajeId) {
+      return null;
+    }
+    try {
+      final activoSnap = await _col
+          .doc(viajeActivoId)
+          .get(const GetOptions(source: Source.server));
+      if (!activoSnap.exists) {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        return null;
+      }
+      final ad = activoSnap.data() ?? <String, dynamic>{};
+      if (viajeOperativoBloqueanteParaTaxista(ad, uidTaxista)) {
+        return 'taxista-ocupado';
+      }
+      await _limpiarViajeActivoIdTaxista(uidTaxista);
+      return null;
+    } on FirebaseException catch (e) {
+      final c = e.code.toLowerCase();
+      if (c == 'permission-denied' || c == 'permission_denied') {
+        await _limpiarViajeActivoIdTaxista(uidTaxista);
+        _viajesRepoDebugLog(
+          '✅ viajeActivoId sin lectura limpiado antes de claim ($viajeActivoId)',
+        );
+        return null;
+      }
+      rethrow;
+    }
+  }
+
   static Future<String?> _claimViajePorCallable({
     required String viajeId,
     required String uidTaxista,
@@ -1151,59 +2057,208 @@ class ViajesRepo {
     String placa = '',
     String tipoVehiculo = '',
   }) async {
-    try {
-      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
-          .httpsCallable('aceptarViajeSeguro');
-      final idemKey =
-          'accept_${viajeId}_${uidTaxista}_${DateTime.now().millisecondsSinceEpoch}';
-      final resp = await callable.call(<String, dynamic>{
-        'viajeId': viajeId,
-        'nombreTaxista': nombreTaxista,
-        'telefono': telefono,
-        'placa': placa,
-        'tipoVehiculo': tipoVehiculo,
-        'idempotencyKey': idemKey,
-      });
-      final data = (resp.data is Map)
-          ? Map<String, dynamic>.from(resp.data as Map)
-          : <String, dynamic>{};
-      if (data['ok'] == true) {
-        _viajesRepoDebugLog('✅ aceptarViajeSeguro fallback OK');
-        unawaited(AnalyticsRai.logTripAccepted());
-        try {
-          await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-          await _limpiarSiguienteSiEsElClaimed(
-            uidTaxista: uidTaxista,
-            viajeIdClaimed: viajeId,
-          );
-          await _ensureChatForTrip(viajeId);
-        } catch (e) {
-          // El claim en CF ya quedó OK; no convertir en taxista-ocupado por cleanup.
-          _viajesRepoDebugLog(
-              '⚠️ post-claim cleanup (no bloquea ok): $e');
+    for (var intento = 0; intento < 2; intento++) {
+      try {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          _viajesRepoDebugLog('❌ aceptarViajeSeguro: sin currentUser');
+          return 'sesion-expirada';
         }
-        unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
-        return 'ok';
+        if (user.uid.trim() != uidTaxista.trim()) {
+          _viajesRepoDebugLog(
+            '❌ aceptarViajeSeguro: uid auth=${user.uid} != taxista=$uidTaxista',
+          );
+          return 'sesion-expirada';
+        }
+        await user.getIdToken(intento > 0);
+        final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+            .httpsCallable('aceptarViajeSeguro');
+        final idemKey =
+            'accept_${viajeId}_${uidTaxista}_${DateTime.now().millisecondsSinceEpoch}';
+        final resp = await callable.call(<String, dynamic>{
+          'viajeId': viajeId,
+          'nombreTaxista': nombreTaxista,
+          'telefono': telefono,
+          'placa': placa,
+          'tipoVehiculo': tipoVehiculo,
+          'idempotencyKey': idemKey,
+        });
+        final data = (resp.data is Map)
+            ? Map<String, dynamic>.from(resp.data as Map)
+            : <String, dynamic>{};
+        if (data['ok'] == true) {
+          _viajesRepoDebugLog('✅ aceptarViajeSeguro fallback OK');
+          unawaited(AnalyticsRai.logTripAccepted());
+          try {
+            await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+            await _limpiarSiguienteSiEsElClaimed(
+              uidTaxista: uidTaxista,
+              viajeIdClaimed: viajeId,
+            );
+            await _ensureChatForTrip(viajeId);
+          } catch (e) {
+            _viajesRepoDebugLog(
+                '⚠️ post-claim cleanup (no bloquea ok): $e');
+          }
+          unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
+          return 'ok';
+        }
+      } on FirebaseFunctionsException catch (e) {
+        _viajesRepoDebugLog('❌ aceptarViajeSeguro: ${e.code} ${e.message}');
+        if (e.code == 'unauthenticated' && intento == 0) {
+          await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          continue;
+        }
+        if (e.code == 'failed-precondition') {
+          final m = (e.message ?? '').trim();
+          if (m.isNotEmpty) return m;
+        }
+        if (e.code == 'permission-denied') {
+          return 'permiso:${e.code}';
+        }
+        if (e.code == 'unauthenticated') {
+          return 'sesion-expirada';
+        }
+        if (e.code == 'not-found' || e.code == 'unimplemented') {
+          return 'callable-no-disponible';
+        }
+        if (e.code == 'unavailable' ||
+            e.code == 'deadline-exceeded' ||
+            e.code == 'internal' ||
+            e.code == 'aborted' ||
+            e.code == 'resource-exhausted') {
+          return null;
+        }
+      } catch (cfErr) {
+        _viajesRepoDebugLog('❌ aceptarViajeSeguro fallback error: $cfErr');
       }
-    } on FirebaseFunctionsException catch (e) {
-      _viajesRepoDebugLog('❌ aceptarViajeSeguro: ${e.code} ${e.message}');
-      if (e.code == 'failed-precondition') {
-        final m = (e.message ?? '').trim();
-        if (m.isNotEmpty) return m;
-      }
-      if (e.code == 'permission-denied') {
-        return 'permiso:${e.code}';
-      }
-      if (e.code == 'unauthenticated') {
-        return 'permiso:${e.code}';
-      }
-      if (e.code == 'not-found' || e.code == 'unimplemented') {
-        return 'callable-no-disponible';
-      }
-    } catch (cfErr) {
-      _viajesRepoDebugLog('❌ aceptarViajeSeguro fallback error: $cfErr');
+      break;
     }
     return null;
+  }
+
+  static Future<bool> _viajeAsignadoATaxistaEnServidor({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    try {
+      final snap = await _col
+          .doc(viajeId)
+          .get(const GetOptions(source: Source.server));
+      if (!snap.exists) return false;
+      final d = snap.data() ?? <String, dynamic>{};
+      final uid =
+          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+      return uid.isNotEmpty && uid == uidTaxista.trim();
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ _viajeAsignadoATaxistaEnServidor: $e');
+      return false;
+    }
+  }
+
+  static Future<void> _claimPostProcesoExitoso({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    try {
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+      await _limpiarSiguienteSiEsElClaimed(
+        uidTaxista: uidTaxista,
+        viajeIdClaimed: viajeId,
+      );
+      await _ensureChatForTrip(viajeId);
+      _viajesRepoDebugLog('✅ Post-proceso completado');
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ post-claim cleanup (no bloquea ok): $e');
+    }
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> vSnap =
+          await _col.doc(viajeId).get();
+      final Map<String, dynamic> d = vSnap.data() ?? <String, dynamic>{};
+      if (AsignacionTurismoRepo.esDocumentoViajeTurismo(d)) {
+        await sincronizarChoferTurismoTrasAceptarDesdePool(
+          uidChofer: uidTaxista,
+          viajeId: viajeId,
+        );
+        final String uidCli =
+            (d['uidCliente'] ?? d['clienteId'] ?? '').toString().trim();
+        if (uidCli.isNotEmpty) {
+          await _db.collection('usuarios').doc(uidCli).set(
+            <String, dynamic>{
+              'viajeActivoId': viajeId,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        }
+      }
+    } catch (e) {
+      _viajesRepoDebugLog('⚠️ post-claim turismo pool sync: $e');
+    }
+    unawaited(AnalyticsRai.logTripAccepted());
+    unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
+    unawaited(ensureCodigoVerificacionViaje(viajeId));
+  }
+
+  static Future<String?> _claimViajeIntentarCallableConRetry({
+    required String viajeId,
+    required String uidTaxista,
+    required String nombreTaxista,
+    String telefono = '',
+    String placa = '',
+    String tipoVehiculo = '',
+  }) async {
+    var cf = await _claimViajePorCallable(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
+      nombreTaxista: nombreTaxista,
+      telefono: telefono,
+      placa: placa,
+      tipoVehiculo: tipoVehiculo,
+    );
+    if (cf == 'ok') return 'ok';
+    if (cf == 'taxista-ocupado') {
+      await limpiarViajeActivoSiNoOperativo(uidTaxista);
+      cf = await _claimViajePorCallable(
+        viajeId: viajeId,
+        uidTaxista: uidTaxista,
+        nombreTaxista: nombreTaxista,
+        telefono: telefono,
+        placa: placa,
+        tipoVehiculo: tipoVehiculo,
+      );
+    }
+    return cf;
+  }
+
+  static Future<String> _claimResolverTrasFalloPermiso({
+    required String viajeId,
+    required String uidTaxista,
+    required String nombreTaxista,
+    String telefono = '',
+    String placa = '',
+    String tipoVehiculo = '',
+    String? cfResult,
+    required String codigoPermiso,
+  }) async {
+    if (cfResult == 'ok') return 'ok';
+    if (await _viajeAsignadoATaxistaEnServidor(
+      viajeId: viajeId,
+      uidTaxista: uidTaxista,
+    )) {
+      await _claimPostProcesoExitoso(
+        viajeId: viajeId,
+        uidTaxista: uidTaxista,
+      );
+      return 'ok';
+    }
+    if (cfResult != null &&
+        cfResult.isNotEmpty &&
+        !_claimCallablePermiteFallbackLocal(cfResult)) {
+      return cfResult;
+    }
+    return 'permiso:$codigoPermiso';
   }
 
   static Future<String> claimTripWithReason({
@@ -1218,206 +2273,153 @@ class ViajesRepo {
         '🟡 INICIO claimTripWithReason - viajeId: $viajeId, taxista: $uidTaxista');
 
     await limpiarViajeActivoSiNoOperativo(uidTaxista);
-
-    // Cloud Function (Admin SDK): evita permission-denied en claim pool motor/vehículo.
-    final cfPrimero = await _claimViajePorCallable(
-      viajeId: viajeId,
+    await _asegurarViajeActivoIdLegibleAntesClaim(uidTaxista);
+    final bloqueoActivo = await _resolverViajeActivoAntesClaim(
       uidTaxista: uidTaxista,
-      nombreTaxista: nombreTaxista,
-      telefono: telefono,
-      placa: placa,
-      tipoVehiculo: tipoVehiculo,
+      viajeId: viajeId,
     );
-    if (cfPrimero == 'ok') return 'ok';
-    if (cfPrimero == 'taxista-ocupado') {
-      await limpiarViajeActivoSiNoOperativo(uidTaxista);
-      final cfRetry = await _claimViajePorCallable(
-        viajeId: viajeId,
-        uidTaxista: uidTaxista,
-        nombreTaxista: nombreTaxista,
-        telefono: telefono,
-        placa: placa,
-        tipoVehiculo: tipoVehiculo,
-      );
-      if (cfRetry == 'ok') return 'ok';
-      if (cfRetry != null && cfRetry.isNotEmpty) return cfRetry;
-    } else if (cfPrimero != null && cfPrimero.isNotEmpty) {
-      return cfPrimero;
+    if (bloqueoActivo != null) {
+      return bloqueoActivo;
     }
 
     final vRef = _col.doc(viajeId);
     final uRef = _db.collection('usuarios').doc(uidTaxista);
 
+    final uSnapPre = await uRef.get();
+    final uDataPre = uSnapPre.data() ?? const <String, dynamic>{};
+    final rechazoPre = taxistaRechazoAceptarViajePool(uDataPre);
+    if (rechazoPre != null) {
+      _viajesRepoDebugLog('❌ Taxista no apto (pre-tx): $rechazoPre');
+      return rechazoPre;
+    }
+    final bSnapPre =
+        await _db.collection('billeteras_taxista').doc(uidTaxista).get();
+    if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
+        uDataPre, bSnapPre.data())) {
+      if (uDataPre['tienePagoPendiente'] == true) {
+        return 'bloqueado-pago-semanal';
+      }
+      return 'bloqueado-comision-efectivo';
+    }
+    final vSnapPre = await vRef.get(const GetOptions(source: Source.server));
+    if (!vSnapPre.exists) return 'no-existe';
+    final dPre = vSnapPre.data() ?? <String, dynamic>{};
+    final prepagoPre =
+        PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
+      billeData: bSnapPre.data(),
+      viajeData: dPre,
+    );
+    if (prepagoPre != null) return prepagoPre;
+    final poolModoPre =
+        ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uDataPre);
+    if (!ViajePoolTaxistaGate.conductorPuedeClaimViajeEnPool(dPre, poolModoPre)) {
+      return 'tipo-servicio-no-coincide';
+    }
+
+    final String _telPre =
+        (telefono.isNotEmpty ? telefono : (uDataPre['telefono'] ?? ''))
+            .toString();
+    final String _placPre =
+        (placa.isNotEmpty ? placa : (uDataPre['placa'] ?? '')).toString();
+    final String _tipoPre = (tipoVehiculo.isNotEmpty
+            ? tipoVehiculo
+            : (uDataPre['tipoVehiculo'] ?? ''))
+        .toString();
+    final String _marcaPre =
+        (uDataPre['marca'] ?? uDataPre['vehiculoMarca'] ?? '').toString();
+    final String _modeloPre =
+        (uDataPre['modelo'] ?? uDataPre['vehiculoModelo'] ?? '').toString();
+    final String _colorPre =
+        (uDataPre['color'] ?? uDataPre['vehiculoColor'] ?? '').toString();
+    final String tipoServicioPre = (dPre['tipoServicio'] ?? 'normal').toString();
+    String tipoVehiculoFmtPre = _tipoPre;
+    if (tipoServicioPre == 'motor') {
+      tipoVehiculoFmtPre = '🛵 MOTOR 🛵';
+    } else if (tipoServicioPre == 'turismo') {
+      tipoVehiculoFmtPre = '🏝️ TURISMO 🏝️';
+    } else if (tipoServicioPre == 'normal') {
+      tipoVehiculoFmtPre = '🚗 NORMAL';
+    } else if (tipoServicioPre == 'bola_ahorro') {
+      tipoVehiculoFmtPre = '💚 AHORRA';
+    }
+    final bancoSnapPre = _snapshotPerfilTaxistaBanco(uDataPre);
+    final bool cierraNegBolaPre =
+        (dPre['bolaPuebloId'] ?? dPre['bolaId'] ?? '').toString().trim().isNotEmpty ||
+        tipoServicioPre == 'bola_ahorro';
+
+    // Sin esta semilla el viaje nace con el taxista en (0,0) y el cliente ve el
+    // mapa vacío hasta que el chofer abre la pantalla y el GPS emite el primer
+    // ping. La última posición conocida es instantánea y no pide permisos.
+    double latSemillaPre = 0.0;
+    double lonSemillaPre = 0.0;
+    try {
+      final Position? ultimaPos = await Geolocator.getLastKnownPosition();
+      if (ultimaPos != null &&
+          ultimaPos.latitude.abs() > 0.0001 &&
+          ultimaPos.longitude.abs() > 0.0001) {
+        latSemillaPre = ultimaPos.latitude;
+        lonSemillaPre = ultimaPos.longitude;
+      }
+    } catch (_) {
+      // GPS apagado o sin permiso: se queda en 0 y el mapa espera el ping.
+    }
+
     try {
       await _db.runTransaction((tx) async {
-        _viajesRepoDebugLog('🟡 TX START claimTripWithReason');
+        _viajesRepoDebugLog('🟡 TX START claimTripWithReason (solo viaje)');
         final vSnap = await tx.get(vRef);
         if (!vSnap.exists) {
-          _viajesRepoDebugLog('❌ Viaje no existe');
           throw 'no-existe';
         }
         final d = vSnap.data()!;
-        _viajesRepoDebugLog(
-            '📄 Data actual: estado=${d['estado']}, uidTaxista=${d['uidTaxista']}, taxistaId=${d['taxistaId']}');
-
         final String estadoRaw = (d['estado'] ?? '').toString().trim();
         final String estadoNorm = EstadosViaje.normalizar(estadoRaw);
         if (!ViajePoolTaxistaGate.estadoPermiteClaimPool(
             estadoRaw, estadoNorm)) {
-          _viajesRepoDebugLog('❌ Estado incorrecto: $estadoRaw (norm=$estadoNorm)');
           throw 'estado-no-pendiente';
         }
-
         final bool yaAsignado =
             ((d['uidTaxista'] ?? '') as String).isNotEmpty ||
                 ((d['taxistaId'] ?? '') as String).isNotEmpty;
-        if (yaAsignado) {
-          _viajesRepoDebugLog(
-              '❌ Ya tiene taxista: uidTaxista=${d['uidTaxista']}, taxistaId=${d['taxistaId']}');
-          throw 'ya-asignado';
-        }
-
-        final canalCorp = (d['canalAsignacion'] ?? '').toString();
-        if (canalCorp == 'corporativo_fijo') {
+        if (yaAsignado) throw 'ya-asignado';
+        if ((d['canalAsignacion'] ?? '').toString() == 'corporativo_fijo') {
           throw 'corporativo-fijo';
         }
-
         final now = DateTime.now();
         final tsAA = d['acceptAfter'];
         if (tsAA is Timestamp && now.isBefore(tsAA.toDate())) {
-          _viajesRepoDebugLog(
-              '❌ acceptAfter-futuro: ${tsAA.toDate().toIso8601String()} > ${now.toIso8601String()}');
           throw 'acceptAfter-futuro';
         }
         final tsPub = d['publishAt'];
         if (tsPub is Timestamp && tsPub.toDate().isAfter(now)) {
-          _viajesRepoDebugLog(
-              '❌ publish-futuro: ${tsPub.toDate().toIso8601String()} > ${now.toIso8601String()}');
           throw 'publish-futuro';
         }
-
         final reservadoPor = (d['reservadoPor'] ?? '').toString();
         DateTime? reservadoHasta;
         final rh = d['reservadoHasta'];
         if (rh is Timestamp) reservadoHasta = rh.toDate();
-        final reservaVigente = reservadoPor.isNotEmpty &&
-            (reservadoHasta == null || reservadoHasta.isAfter(now));
-        if (reservaVigente && reservadoPor != uidTaxista) {
-          _viajesRepoDebugLog(
-              '❌ Reservado por otro: reservadoPor=$reservadoPor, reservadoHasta=$reservadoHasta');
+        if (reservadoPor.isNotEmpty &&
+            (reservadoHasta == null || reservadoHasta.isAfter(now)) &&
+            reservadoPor != uidTaxista) {
           throw 'reservado-otro';
         }
 
-        final uSnap = await tx.get(uRef);
-        final uData = uSnap.data() ?? const <String, dynamic>{};
-        final rechazoClaim = taxistaRechazoAceptarViajePool(uData);
-        if (rechazoClaim != null) {
-          _viajesRepoDebugLog('❌ Taxista no apto para claim: $rechazoClaim');
-          throw rechazoClaim;
-        }
-        final bSnap =
-            await tx.get(_db.collection('billeteras_taxista').doc(uidTaxista));
-        if (!PagosTaxistaRepo.taxistaSinBloqueoPrepagoOperativo(
-            uData, bSnap.data())) {
-          if (uData['tienePagoPendiente'] == true) {
-            _viajesRepoDebugLog(
-                '❌ Taxista bloqueado: comisión efectivo / tienePagoPendiente');
-            throw 'bloqueado-pago-semanal';
-          }
-          _viajesRepoDebugLog('❌ Taxista bloqueado: prepago / comisión legacy');
-          throw 'bloqueado-comision-efectivo';
-        }
-        final prepagoRechazo =
-            PagosTaxistaRepo.codigoRechazoPrepagoInsuficienteComisionViaje(
-          billeData: bSnap.data(),
-          viajeData: d,
-        );
-        if (prepagoRechazo != null) {
-          _viajesRepoDebugLog(
-              '❌ Prepago insuficiente para comisión del viaje en efectivo');
-          throw prepagoRechazo;
-        }
-        final String viajeActivoId =
-            (uData['viajeActivoId'] ?? '').toString().trim();
-        if (viajeActivoId.isNotEmpty && viajeActivoId != viajeId) {
-          final activoSnap = await tx.get(_col.doc(viajeActivoId));
-          if (activoSnap.exists) {
-            final ad = activoSnap.data() ?? <String, dynamic>{};
-            if (viajeOperativoBloqueanteParaTaxista(ad, uidTaxista)) {
-              _viajesRepoDebugLog(
-                  '❌ Taxista ocupado con viajeActivoId=$viajeActivoId');
-              throw 'taxista-ocupado';
-            }
-          }
-          tx.set(
-            uRef,
-            {
-              'viajeActivoId': '',
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-        }
-
-        final String poolModo =
-            ViajePoolTaxistaGate.poolModoConductorDesdeUsuario(uData);
-        if (!ViajePoolTaxistaGate.conductorPuedeClaimViajeEnPool(d, poolModo)) {
-          _viajesRepoDebugLog(
-            '❌ tipo servicio viaje=${d['tipoServicio']} vs conductor=$poolModo',
-          );
-          throw 'tipo-servicio-no-coincide';
-        }
-
-        final String _tel =
-            (telefono.isNotEmpty ? telefono : (uData['telefono'] ?? ''))
-                .toString();
-        final String _plac =
-            (placa.isNotEmpty ? placa : (uData['placa'] ?? '')).toString();
-        final String _tipo = (tipoVehiculo.isNotEmpty
-                ? tipoVehiculo
-                : (uData['tipoVehiculo'] ?? ''))
-            .toString();
-        final String _marca =
-            (uData['marca'] ?? uData['vehiculoMarca'] ?? '').toString();
-        final String _modelo =
-            (uData['modelo'] ?? uData['vehiculoModelo'] ?? '').toString();
-        final String _color =
-            (uData['color'] ?? uData['vehiculoColor'] ?? '').toString();
-
-        final String tipoServicio = d['tipoServicio'] ?? 'normal';
-        String tipoVehiculoFormateado = _tipo;
-        if (tipoServicio == 'motor') {
-          tipoVehiculoFormateado = '🛵 MOTOR 🛵';
-        } else if (tipoServicio == 'turismo') {
-          tipoVehiculoFormateado = '🏝️ TURISMO 🏝️';
-        } else if (tipoServicio == 'normal') {
-          tipoVehiculoFormateado = '🚗 NORMAL';
-        } else if (tipoServicio == 'bola_ahorro') {
-          tipoVehiculoFormateado = '💚 AHORRA';
-        }
-
-        final String bolaPidTx =
-            (d['bolaPuebloId'] ?? d['bolaId'] ?? '').toString().trim();
-        final bool cierraNegBola =
-            bolaPidTx.isNotEmpty || tipoServicio == 'bola_ahorro';
-
-        _viajesRepoDebugLog('🟢 Intentando actualizar viaje...');
         final vPatch = <String, dynamic>{
           'uidTaxista': uidTaxista,
           'taxistaId': uidTaxista,
           'nombreTaxista': nombreTaxista,
-          'telefono': _tel,
-          'placa': _plac,
-          'tipoVehiculo': tipoVehiculoFormateado,
-          'tipoVehiculoOriginal': _tipo,
-          'marca': _marca,
-          'modelo': _modelo,
-          'color': _color,
-          'latTaxista': 0.0,
-          'lonTaxista': 0.0,
-          'driverLat': 0.0,
-          'driverLon': 0.0,
+          'telefono': _telPre,
+          'placa': _placPre,
+          'tipoVehiculo': tipoVehiculoFmtPre,
+          'tipoVehiculoOriginal': _tipoPre,
+          'marca': _marcaPre,
+          'modelo': _modeloPre,
+          'color': _colorPre,
+          'latTaxista': latSemillaPre,
+          'lonTaxista': lonSemillaPre,
+          'driverLat': latSemillaPre,
+          'driverLon': lonSemillaPre,
+          ...bancoSnapPre,
           'estado': EstadosViaje.aceptado,
           'aceptado': true,
           'rechazado': false,
@@ -1425,69 +2427,57 @@ class ViajesRepo {
           'aceptadoEn': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
           'actualizadoEn': FieldValue.serverTimestamp(),
-          'reservadoPor': '',
-          'reservadoHasta': null,
-          'ignoradosPor': FieldValue.delete(),
         };
-        if (cierraNegBola) {
+        if (cierraNegBolaPre) {
           vPatch['bolaNegociacionAbierta'] = false;
         }
+        tx.set(vRef, vPatch, SetOptions(merge: true));
 
-        final String canalAsign =
-            (d['canalAsignacion'] ?? 'pool').toString().trim();
-        if (tipoServicio == 'turismo' &&
-            canalAsign == AsignacionTurismoRepo.canalTurismoPool) {
-          final String uidCliente =
-              (d['uidCliente'] ?? d['clienteId'] ?? '').toString().trim();
-          if (uidCliente.isNotEmpty) {
-            tx.set(
-              _db.collection('usuarios').doc(uidCliente),
-              {
-                'viajeActivoId': vRef.id,
-                'updatedAt': FieldValue.serverTimestamp(),
-                'actualizadoEn': FieldValue.serverTimestamp(),
-              },
-              SetOptions(merge: true),
-            );
-          }
-        }
-
-        tx.update(vRef, vPatch);
-
+        // Dentro de la TX: si esto quedaba fuera y fallaba, el viaje terminaba
+        // asignado pero el taxista sin viaje activo, sin pantalla a la que volver.
         tx.set(
-            uRef,
-            {
-              'viajeActivoId': vRef.id,
-              'updatedAt': FieldValue.serverTimestamp(),
-              'actualizadoEn': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true));
-        _viajesRepoDebugLog('✅ TX preparada correctamente (update viaje + set usuario)');
+          uRef,
+          <String, dynamic>{
+            'viajeActivoId': viajeId,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       });
 
       _viajesRepoDebugLog('✅ Transacción completada');
-      try {
-        await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
-        await _limpiarSiguienteSiEsElClaimed(
-          uidTaxista: uidTaxista,
-          viajeIdClaimed: viajeId,
-        );
-        await _ensureChatForTrip(viajeId);
-        _viajesRepoDebugLog('✅ Post-proceso completado');
-      } catch (e) {
-        // El claim ya quedó OK; no convertir en fallo total por cleanup/chat.
-        _viajesRepoDebugLog('⚠️ post-claim cleanup (no bloquea ok): $e');
-      }
-
-      unawaited(AnalyticsRai.logTripAccepted());
-      unawaited(BolaPuebloFirestoreSync.postClaimViajeEspejo(viajeId));
+      await _claimPostProcesoExitoso(
+        viajeId: viajeId,
+        uidTaxista: uidTaxista,
+      );
       return 'ok';
     } on FirebaseException catch (e) {
       _viajesRepoDebugLog(
           '❌ FirebaseException en claimTripWithReason: code=${e.code}, message=${e.message}');
       final String code = e.code.toLowerCase();
       if (code == 'permission-denied' || code == 'permission_denied') {
-        final String? cf = await _claimViajePorCallable(
+        if (await _viajeAsignadoATaxistaEnServidor(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+        )) {
+          await uRef.set(
+            {
+              'viajeActivoId': viajeId,
+              'updatedAt': FieldValue.serverTimestamp(),
+              'actualizadoEn': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+          await _claimPostProcesoExitoso(
+            viajeId: viajeId,
+            uidTaxista: uidTaxista,
+          );
+          return 'ok';
+        }
+        _viajesRepoDebugLog(
+            '⚠️ claim local permission-denied; intentando aceptarViajeSeguro');
+        final String? cf = await _claimViajeIntentarCallableConRetry(
           viajeId: viajeId,
           uidTaxista: uidTaxista,
           nombreTaxista: nombreTaxista,
@@ -1495,7 +2485,16 @@ class ViajesRepo {
           placa: placa,
           tipoVehiculo: tipoVehiculo,
         );
-        if (cf != null) return cf;
+        return _claimResolverTrasFalloPermiso(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+          nombreTaxista: nombreTaxista,
+          telefono: telefono,
+          placa: placa,
+          tipoVehiculo: tipoVehiculo,
+          cfResult: cf,
+          codigoPermiso: e.code,
+        );
       }
       return 'permiso:${e.code}';
     } catch (e) {
@@ -1503,10 +2502,13 @@ class ViajesRepo {
       if (e == 'tipo-servicio-no-coincide') {
         return 'tipo-servicio-no-coincide';
       }
+      if (e is String) return e;
       final String msg = e.toString().toLowerCase();
       if (msg.contains('permission-denied') ||
           msg.contains('permission_denied')) {
-        final String? cf = await _claimViajePorCallable(
+        _viajesRepoDebugLog(
+            '⚠️ claim local permission-denied (genérico); intentando aceptarViajeSeguro');
+        final String? cf = await _claimViajeIntentarCallableConRetry(
           viajeId: viajeId,
           uidTaxista: uidTaxista,
           nombreTaxista: nombreTaxista,
@@ -1514,7 +2516,16 @@ class ViajesRepo {
           placa: placa,
           tipoVehiculo: tipoVehiculo,
         );
-        if (cf != null) return cf;
+        return _claimResolverTrasFalloPermiso(
+          viajeId: viajeId,
+          uidTaxista: uidTaxista,
+          nombreTaxista: nombreTaxista,
+          telefono: telefono,
+          placa: placa,
+          tipoVehiculo: tipoVehiculo,
+          cfResult: cf,
+          codigoPermiso: 'permission-denied',
+        );
       }
       return e.toString();
     }
@@ -1564,6 +2575,27 @@ class ViajesRepo {
         c == 'unimplemented' ||
         c == 'unavailable' ||
         c == 'deadline-exceeded';
+  }
+
+  /// CF no desplegada o sin red (p. ej. plan Spark sin Blaze): operar vía Firestore cliente.
+  static bool _callableOperacionViajeSinServidor(Object e) {
+    if (e is FirebaseFunctionsException) {
+      final String c = e.code.toLowerCase().trim();
+      return c == 'not-found' ||
+          c == 'unimplemented' ||
+          c == 'unavailable' ||
+          c == 'deadline-exceeded' ||
+          c == 'internal' ||
+          c == 'aborted' ||
+          c == 'resource-exhausted';
+    }
+    final String msg = e.toString().toLowerCase();
+    return msg.contains('not-found') ||
+        msg.contains('not_found') ||
+        msg.contains('unimplemented') ||
+        msg.contains('unavailable') ||
+        msg.contains('deadline-exceeded') ||
+        msg.contains('deadline_exceeded');
   }
 
   static Future<bool> _reservarSiguientePorCallable({
@@ -1850,19 +2882,45 @@ class ViajesRepo {
     if (id.isEmpty) throw Exception('El viaje no existe');
 
     try {
+      await _marcarEnCaminoPickupLocal(
+        viajeId: id,
+        uidTaxista: uidTaxista,
+      );
+      return;
+    } catch (eLocal) {
+      final bool permiso = eLocal is FirebaseException &&
+          (eLocal.code == 'permission-denied' ||
+              eLocal.code == 'permission_denied');
+      if (!permiso) rethrow;
+      _viajesRepoDebugLog(
+        '⚠️ marcarEnCaminoPickup local permission-denied; intentando CF',
+      );
+    }
+
+    try {
       final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
           .httpsCallable('marcarEnCaminoPickupSeguro');
       await callable.call(<String, dynamic>{'viajeId': id});
-      return;
     } catch (e) {
-      final msg = e.toString().toLowerCase();
-      final cfMissing = msg.contains('not-found') ||
-          msg.contains('not_found') ||
-          msg.contains('unimplemented');
-      if (!cfMissing) rethrow;
+      if (_callableOperacionViajeSinServidor(e)) {
+        _viajesRepoDebugLog(
+          '⚠️ marcarEnCaminoPickupSeguro no disponible; reintento local',
+        );
+        await _marcarEnCaminoPickupLocal(
+          viajeId: id,
+          uidTaxista: uidTaxista,
+        );
+        return;
+      }
+      rethrow;
     }
+  }
 
-    final ref = _col.doc(id);
+  static Future<void> _marcarEnCaminoPickupLocal({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    final ref = _col.doc(viajeId);
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
@@ -1882,13 +2940,70 @@ class ViajesRepo {
           estado, EstadosViaje.enCaminoPickup)) {
         throw Exception('Estado inválido para en_camino_pickup');
       }
-      tx.update(ref, {
-        'estado': EstadosViaje.enCaminoPickup,
-        'activo': true,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'actualizadoEn': FieldValue.serverTimestamp(),
-      });
+      tx.set(
+        ref,
+        {
+          'estado': EstadosViaje.enCaminoPickup,
+          'activo': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
     });
+  }
+
+  static bool _viajeDocTieneAbordoConfirmado(Map<String, dynamic> d) {
+    final String est = EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    if (EstadosViaje.esEnCurso(est) || EstadosViaje.esAbordo(est)) return true;
+    if (d['clienteAbordo'] == true) return true;
+    final dynamic ex = d['extras'];
+    return ex is Map && ex['clienteAbordo'] == true;
+  }
+
+  static Future<void> _verificarMarcarClienteAbordoEnServidor({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    final String id = viajeId.trim();
+    if (id.isEmpty) return;
+
+    for (int intento = 0; intento < 3; intento++) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> snap = await _col
+            .doc(id)
+            .get(const GetOptions(source: Source.server));
+        if (!snap.exists) return;
+        final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+        if (_viajeDocTieneAbordoConfirmado(d)) return;
+      } catch (e) {
+        _viajesRepoDebugLog(
+          '⚠️ verificar marcarClienteAbordo intento=$intento error: $e',
+        );
+      }
+
+      if (intento >= 2) break;
+
+      try {
+        await _marcarClienteAbordoLocal(
+          viajeId: id,
+          uidTaxista: uidTaxista,
+        );
+      } catch (eLocal) {
+        final bool permiso = eLocal is FirebaseException &&
+            (eLocal.code == 'permission-denied' ||
+                eLocal.code == 'permission_denied');
+        if (!permiso) rethrow;
+        try {
+          final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+              .httpsCallable('marcarClienteAbordoSeguro');
+          await callable.call(<String, dynamic>{'viajeId': id});
+        } catch (eCf) {
+          if (!_callableOperacionViajeSinServidor(eCf)) rethrow;
+        }
+      }
+      await Future<void>.delayed(Duration(milliseconds: 320 * (intento + 1)));
+    }
   }
 
   static Future<void> marcarClienteAbordo({
@@ -1898,69 +3013,113 @@ class ViajesRepo {
     final id = viajeId.trim();
     if (id.isEmpty) throw Exception('El viaje no existe');
 
-    // Preferir Admin SDK (laptop/web): evita permission-denied de reglas cliente.
+    // Backend primero: el PIN de abordaje y el estado corporativo (en_origen_esperando)
+    // solo los puede fijar `marcarClienteAbordoSeguro`.
     try {
       final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
           .httpsCallable('marcarClienteAbordoSeguro');
       await callable.call(<String, dynamic>{'viajeId': id});
-      try {
-        final post = await _col.doc(id).get();
-        final tipo = (post.data()?['tipoServicio'] ?? '').toString().trim();
-        if (tipo == 'bola_ahorro') {
-          unawaited(
-              BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(id));
-        }
-      } catch (_) {}
-      return;
-    } catch (e) {
-      final msg = e.toString().toLowerCase();
-      // Si la CF no existe aún en un entorno, caer al write local.
-      final cfMissing = msg.contains('not-found') ||
-          msg.contains('not_found') ||
-          msg.contains('unimplemented');
-      if (!cfMissing) {
-        // failed-precondition / permission-denied de la CF: no enmascarar.
-        rethrow;
-      }
+    } catch (eCf) {
+      final bool sinServidor = _callableOperacionViajeSinServidor(eCf);
+      final bool permisoCf = eCf is FirebaseFunctionsException &&
+          eCf.code.toLowerCase().trim() == 'permission-denied';
+      if (!sinServidor && !permisoCf) rethrow;
+      _viajesRepoDebugLog(
+        '⚠️ marcarClienteAbordoSeguro no disponible ($eCf); abordo local',
+      );
+      await _marcarClienteAbordoLocal(
+        viajeId: id,
+        uidTaxista: uidTaxista,
+      );
     }
 
-    final ref = _col.doc(id);
+    await _marcarClienteAbordoPostEfectos(
+      viajeId: id,
+      uidTaxista: uidTaxista,
+    );
+
+    await _verificarMarcarClienteAbordoEnServidor(
+      viajeId: id,
+      uidTaxista: uidTaxista,
+    );
+  }
+
+  static Future<void> _marcarClienteAbordoLocal({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    final ref = _col.doc(viajeId);
     await _db.runTransaction((tx) async {
       final snap = await tx.get(ref);
       if (!snap.exists) throw Exception('El viaje no existe');
       final d = snap.data()!;
-      final String uidDoc = (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString();
-      if (uidDoc != uidTaxista) {
+      final String uidDoc =
+          (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+      if (uidDoc.isEmpty || uidDoc != uidTaxista) {
         throw Exception('No autorizado');
       }
       final String estado = (d['estado'] ?? '').toString();
-      if (!EstadosViaje.puedeTransicionar(estado, EstadosViaje.aBordo)) {
+      final String estadoNorm = EstadosViaje.normalizar(estado);
+      if (estadoNorm == EstadosViaje.enCurso) {
+        return;
+      }
+      if (estadoNorm == EstadosViaje.aBordo) {
+        if (d['clienteAbordo'] == true) return;
+        tx.set(
+          ref,
+          <String, dynamic>{
+            'clienteAbordo': true,
+            'clienteAbordoEn': FieldValue.serverTimestamp(),
+            'pickupConfirmadoEn': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+            'actualizadoEn': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+        return;
+      }
+      if (!EstadosViaje.puedeTransicionar(estado, EstadosViaje.aBordo) &&
+          !EstadosViaje.esAceptado(estado)) {
         throw Exception('Estado inválido para a_bordo');
       }
-      final String codigoVerificacion = codigoVerificacionSeisDigitosDesdeDoc(d);
-      tx.update(ref, {
+      // El PIN lo emite el backend (`marcarClienteAbordoSeguro` /
+      // `ensureViajeCodigoVerificacion`): aquí no se toca `codigoVerificacion*`.
+      final Map<String, dynamic> patch = <String, dynamic>{
         'estado': EstadosViaje.aBordo,
-        'activo': true,
         'clienteAbordo': true,
         'clienteAbordoEn': FieldValue.serverTimestamp(),
-        'codigoVerificacion': codigoVerificacion,
-        'codigoVerificado': false,
         'pickupConfirmadoEn': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'actualizadoEn': FieldValue.serverTimestamp(),
-      });
+      };
+      if (d['activo'] != true) {
+        patch['activo'] = true;
+      }
+      tx.set(ref, patch, SetOptions(merge: true));
     });
+  }
 
+  static Future<void> _marcarClienteAbordoPostEfectos({
+    required String viajeId,
+    required String uidTaxista,
+  }) async {
+    final ref = _col.doc(viajeId);
     try {
       final post = await ref.get();
-      final tipo = (post.data()?['tipoServicio'] ?? '').toString().trim();
+      final Map<String, dynamic> d = post.data() ?? <String, dynamic>{};
+      final tipo = (d['tipoServicio'] ?? '').toString().trim();
       if (tipo == 'bola_ahorro') {
-        unawaited(BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(id));
+        unawaited(
+            BolaPuebloFirestoreSync.syncBolaPickupConfirmadaDesdeViaje(viajeId));
+      }
+      // Abordo resuelto por el fallback local: el PIN todavía no existe.
+      if (_pinExistenteEnMap(d) == null) {
+        unawaited(ensureCodigoVerificacionViaje(viajeId));
       }
     } catch (_) {}
 
     try {
-      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: id);
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
     } catch (_) {
       /* no bloquear abordaje */
     }
@@ -2111,30 +3270,99 @@ class ViajesRepo {
     return null;
   }
 
+  /// Inicio de viaje autoritativo en backend: el PIN se valida y `codigoVerificado`
+  /// se escribe solo dentro de `iniciarViajeSeguro`. Sin fallback local: una app
+  /// manipulada no puede pasar el viaje a `en_curso` sin el código del pasajero.
   static Future<void> iniciarViaje({
     required String viajeId,
     required String uidTaxista,
     String? pinVerificacion,
   }) async {
-    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
-        .httpsCallable('iniciarViajeSeguro');
-    await callable.call(<String, dynamic>{
-      'viajeId': viajeId,
-      if ((pinVerificacion ?? '').trim().isNotEmpty)
-        'pin': pinVerificacion!.trim(),
-    });
+    final String id = viajeId.trim();
+    if (id.isEmpty) throw Exception('El viaje no existe');
+    final String pin = (pinVerificacion ?? '').replaceAll(RegExp(r'\D'), '');
+
+    await _invocarIniciarViajeSeguro(viajeId: id, pin: pin);
 
     unawaited(AnalyticsRai.logTripStarted());
     try {
-      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: viajeId);
+      await _limpiarOtrosActivosDelTaxista(uidTaxista, exceptoId: id);
     } catch (_) {
       /* no bloquear inicio de viaje */
     }
   }
 
-  /// Conductor: registra llegada a la parada/destino actual (viaje multiparada).
+  /// Códigos transitorios (red, arranque en frío, contención): reintentables sin
+  /// riesgo de contar un intento de PIN fallido, que llega como `failed-precondition`.
+  static bool _inicioViajeReintentable(FirebaseFunctionsException e) {
+    final String c = e.code.toLowerCase().trim();
+    return c == 'unavailable' ||
+        c == 'deadline-exceeded' ||
+        c == 'aborted' ||
+        c == 'internal';
+  }
+
+  static Future<void> _invocarIniciarViajeSeguro({
+    required String viajeId,
+    required String pin,
+  }) async {
+    final HttpsCallable callable =
+        FirebaseFunctions.instanceFor(region: 'us-central1')
+            .httpsCallable('iniciarViajeSeguro');
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'viajeId': viajeId,
+      if (pin.isNotEmpty) 'pin': pin,
+    };
+
+    for (int intento = 0; intento < 3; intento++) {
+      try {
+        await callable.call(payload);
+        return;
+      } on FirebaseFunctionsException catch (e) {
+        if (intento == 2 || !_inicioViajeReintentable(e)) rethrow;
+        _viajesRepoDebugLog(
+          '⚠️ iniciarViajeSeguro ${e.code} (intento ${intento + 1}); reintentando',
+        );
+        await Future<void>.delayed(
+          Duration(milliseconds: 500 * (intento + 1)),
+        );
+      }
+    }
+  }
+
+  /// Conductor: registra llegada a una parada (viaje multiparada).
+  ///
+  /// [legIndex]: parada concreta (orden libre). Si es null, el servidor marca la
+  /// primera parada pendiente (compatibilidad con apps anteriores).
+  static Future<void> marcarMultiparadaNavAbierta({
+    required String viajeId,
+    int? legIndex,
+  }) async {
+    final id = viajeId.trim();
+    if (id.isEmpty) throw Exception('Viaje inválido');
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('marcarMultiparadaNavAbiertaSeguro');
+      final Map<String, dynamic> payload = <String, dynamic>{
+        'viajeId': id,
+        'accion': legIndex == null
+            ? 'marcar_recogida_abierta'
+            : 'marcar_abierta',
+      };
+      if (legIndex != null && legIndex >= 0) {
+        payload['legIndex'] = legIndex;
+      }
+      await callable.call(payload);
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw Exception(msg);
+      throw Exception(e.code);
+    }
+  }
+
   static Future<void> registrarLegMultiparadaCompletada({
     required String viajeId,
+    int? legIndex,
     double? latConfirmacion,
     double? lonConfirmacion,
   }) async {
@@ -2144,6 +3372,9 @@ class ViajesRepo {
       final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
           .httpsCallable('registrarLegMultiparadaSeguro');
       final Map<String, dynamic> payload = <String, dynamic>{'viajeId': id};
+      if (legIndex != null && legIndex >= 0) {
+        payload['legIndex'] = legIndex;
+      }
       if (latConfirmacion != null &&
           lonConfirmacion != null &&
           latConfirmacion.isFinite &&
@@ -2153,6 +3384,33 @@ class ViajesRepo {
         payload['lon'] = lonConfirmacion;
       }
       await callable.call(payload);
+    } on FirebaseFunctionsException catch (e) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) throw Exception(msg);
+      throw Exception(e.code);
+    }
+  }
+
+  /// Ida y vuelta: arranca el regreso o lo cancela devolviendo el recargo.
+  ///
+  /// Devuelve el precio en centavos si el cierre sin regreso bajó la tarifa.
+  static Future<int?> registrarRegresoIdaVuelta({
+    required String viajeId,
+    required bool iniciar,
+  }) async {
+    final id = viajeId.trim();
+    if (id.isEmpty) throw Exception('Viaje inválido');
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+          .httpsCallable('registrarRegresoIdaVuelta');
+      final res = await callable.call(<String, dynamic>{
+        'viajeId': id,
+        'accion': iniciar ? 'iniciar' : 'cancelar',
+      });
+      final dynamic cents = (res.data is Map)
+          ? (res.data as Map)['precioCents']
+          : null;
+      return cents is num ? cents.toInt() : null;
     } on FirebaseFunctionsException catch (e) {
       final msg = (e.message ?? '').trim();
       if (msg.isNotEmpty) throw Exception(msg);
@@ -2176,6 +3434,13 @@ class ViajesRepo {
     if (d['activo'] != true) return false;
     final n = EstadosViaje.normalizar((d['estado'] ?? '').toString());
     return EstadosViaje.activos.contains(n);
+  }
+
+  static bool _viajeDocEsProductoBola(Map<String, dynamic> d) {
+    if ((d['tipoServicio'] ?? '').toString().trim() == 'bola_ahorro') {
+      return true;
+    }
+    return ViajePoolTaxistaGate.bolaPuebloIdDesdeViajeDoc(d).isNotEmpty;
   }
 
   static Future<bool> _espejoBolaTableroOperativo(
@@ -2203,6 +3468,7 @@ class ViajesRepo {
     required String viajeId,
     required Map<String, dynamic> data,
   }) async {
+    if (BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) return;
     final String bolaId =
         (data['bolaPuebloId'] ?? data['bolaId'] ?? '').toString().trim();
     final bool esBola =
@@ -2262,46 +3528,136 @@ class ViajesRepo {
       final userSnap = await _db.collection('usuarios').doc(u).get();
       final vid = (userSnap.data()?['viajeActivoId'] ?? '').toString().trim();
       if (vid.isNotEmpty) {
-        final vSnap = await _col.doc(vid).get();
-        if (vSnap.exists &&
-            _usuarioParticipaViajeDoc(vSnap.data(), u) &&
-            _viajeDocEnFlujoActivo(vSnap.data()) &&
-            await _espejoBolaTableroOperativo(vSnap.data() ?? <String, dynamic>{})) {
-          print('[VIAJE_ACTIVO] match viajeActivoId=$vid');
-          return vSnap;
-        }
-        if (vSnap.exists) {
-          await _liberarEspejoBolaHuerfano(
-            uid: u,
-            viajeId: vid,
-            data: vSnap.data() ?? <String, dynamic>{},
+        DocumentSnapshot<Map<String, dynamic>>? vSnap;
+        try {
+          vSnap = await _col
+              .doc(vid)
+              .get(const GetOptions(source: Source.server));
+        } catch (e) {
+          print(
+            '[VIAJE_ACTIVO] getViajeActivoParaUsuario viajeActivoId read $vid: $e',
           );
-        } else {
-          await _db.collection('usuarios').doc(u).set(<String, dynamic>{
-            'viajeActivoId': '',
-            'updatedAt': FieldValue.serverTimestamp(),
-            'actualizadoEn': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          if (await viajeDocAusenteOInaccesibleParaCliente(vid)) {
+            try {
+              await _db.collection('usuarios').doc(u).set(<String, dynamic>{
+                'viajeActivoId': '',
+                'siguienteViajeId': '',
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+              print(
+                '[VIAJE_ACTIVO] getViajeActivoParaUsuario limpió viajeActivoId huérfano $vid',
+              );
+            } catch (clearErr) {
+              print(
+                '[VIAJE_ACTIVO] getViajeActivoParaUsuario limpiar huérfano: $clearErr',
+              );
+            }
+          }
+        }
+        if (vSnap != null) {
+          if (vSnap.exists && _usuarioParticipaViajeDoc(vSnap.data(), u)) {
+            if (await viajeQueryMatchEsFantasmaParaCliente(vid)) {
+              print(
+                '[VIAJE_ACTIVO] getViajeActivoParaUsuario viajeActivoId fantasma $vid',
+              );
+              try {
+                await _db.collection('usuarios').doc(u).set(<String, dynamic>{
+                  'viajeActivoId': '',
+                  'siguienteViajeId': '',
+                  'updatedAt': FieldValue.serverTimestamp(),
+                  'actualizadoEn': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+              } catch (_) {}
+            } else {
+            final Map<String, dynamic> d =
+                vSnap.data() ?? <String, dynamic>{};
+            final bool overlayOk =
+                ViajePoolTaxistaGate.viajeDocDebeMostrarOverlayShell(d, u) ||
+                    _viajeDocEnFlujoActivo(d);
+            final bool esBola = _viajeDocEsProductoBola(d);
+            if (esBola) {
+              if (await _espejoBolaTableroOperativo(d) && overlayOk) {
+                print('[VIAJE_ACTIVO] match viajeActivoId=$vid (bola)');
+                return vSnap;
+              }
+              if (!BolaAhorroPoolIsolation.bloquearInterferenciaEnFlujoPool()) {
+                await _liberarEspejoBolaHuerfano(
+                  uid: u,
+                  viajeId: vid,
+                  data: d,
+                );
+              }
+            } else if (overlayOk) {
+              print('[VIAJE_ACTIVO] match viajeActivoId=$vid');
+              return vSnap;
+            }
+            }
+          } else if (!vSnap.exists) {
+            try {
+              await _db.collection('usuarios').doc(u).set(<String, dynamic>{
+                'viajeActivoId': '',
+                'updatedAt': FieldValue.serverTimestamp(),
+                'actualizadoEn': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+            } catch (e) {
+              print(
+                '[VIAJE_ACTIVO] getViajeActivoParaUsuario limpiar viajeActivoId: $e',
+              );
+            }
+          }
         }
       }
 
-      const List<String> estadosEnCursoQuery = <String>[
+      // Estados más probables primero (cold start cliente suele ser en_curso/a_bordo).
+      const List<String> estadosActivosQuery = <String>[
         EstadosViaje.enCurso,
         'encurso',
         'en curso',
+        EstadosViaje.aBordo,
+        'a_bordo',
+        EstadosViaje.aceptado,
+        EstadosViaje.enCaminoPickup,
+        'en_camino_pickup',
+        EstadosViaje.pendiente,
+        EstadosViaje.pendientePago,
+        'pendiente_admin',
+        'buscando',
+        'disponible',
       ];
-      for (final est in estadosEnCursoQuery) {
+      for (final est in estadosActivosQuery) {
         for (final field
             in <String>['uidCliente', 'clienteId', 'uidTaxista', 'taxistaId']) {
-          final q = await _col
-              .where(field, isEqualTo: u)
-              .where('estado', isEqualTo: est)
-              .limit(1)
-              .get();
-          if (q.docs.isNotEmpty) {
-            final doc = q.docs.first;
-            print('[VIAJE_ACTIVO] match query field=$field estado=$est id=${doc.id}');
-            return doc;
+          try {
+            final q = await _col
+                .where(field, isEqualTo: u)
+                .where('estado', isEqualTo: est)
+                .limit(5)
+                .get(const GetOptions(source: Source.server));
+            for (final DocumentSnapshot<Map<String, dynamic>> doc in q.docs) {
+              final Map<String, dynamic> qd =
+                  doc.data() ?? <String, dynamic>{};
+              if (!_usuarioParticipaViajeDoc(qd, u)) continue;
+              if (ViajePoolTaxistaGate.esReservaProgramadaLejana(qd)) continue;
+              if (await viajeQueryMatchEsFantasmaParaCliente(doc.id)) {
+                print(
+                  '[VIAJE_ACTIVO] getViajeActivoParaUsuario skip fantasma query id=${doc.id}',
+                );
+                continue;
+              }
+              final bool overlayOk =
+                  ViajePoolTaxistaGate.viajeDocDebeMostrarOverlayShell(qd, u) ||
+                      _viajeDocEnFlujoActivo(qd);
+              if (overlayOk) {
+                print(
+                    '[VIAJE_ACTIVO] match query field=$field estado=$est id=${doc.id}');
+                return doc;
+              }
+            }
+          } catch (e) {
+            print(
+              '[VIAJE_ACTIVO] getViajeActivoParaUsuario query $field/$est: $e',
+            );
           }
         }
       }
@@ -2442,6 +3798,13 @@ class ViajesRepo {
     } on FirebaseFunctionsException catch (e, st) {
       print(
           '[FINALIZAR] FirebaseFunctionsException ${e.code} ${e.message}');
+      if (_callableOperacionViajeSinServidor(e)) {
+        throw Exception(
+          'Para finalizar el viaje y emitir la factura hace falta desplegar '
+          'Cloud Functions (plan Blaze en Firebase). Las reglas de Firestore ya '
+          'están activas; el cierre contable corre en el servidor.',
+        );
+      }
       await ErrorReporting.reportError(
         e,
         stack: st,
@@ -2684,6 +4047,175 @@ class ViajesRepo {
     });
   }
 
+  /// Lectura autoritativa del viaje (evita caché local desactualizado al cancelar).
+  static Future<Map<String, dynamic>?> leerViajeServidor(String viajeId) async {
+    final id = viajeId.trim();
+    if (id.isEmpty) return null;
+    final snap = await _col.doc(id).get(const GetOptions(source: Source.server));
+    if (!snap.exists) return null;
+    return snap.data();
+  }
+
+  static DateTime? _fechaDocViaje(dynamic raw) {
+    if (raw is Timestamp) return raw.toDate();
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw);
+    return null;
+  }
+
+  /// Reserva programada que aún no entró al pool (sin conductor asignado).
+  static bool esReservaProgramadaAntesDelPool(
+    Map<String, dynamic> d, {
+    DateTime? now,
+  }) {
+    final DateTime ref = now ?? DateTime.now();
+    if (d['programado'] != true && d['esAhora'] == true) return false;
+
+    final String estado =
+        EstadosViaje.normalizar((d['estado'] ?? '').toString());
+    if (EstadosViaje.esCancelado(estado) ||
+        EstadosViaje.esCompletado(estado) ||
+        d['completado'] == true) {
+      return false;
+    }
+    if (EstadosViaje.esActivo(estado)) return false;
+
+    final String tid =
+        (d['uidTaxista'] ?? d['taxistaId'] ?? '').toString().trim();
+    if (tid.isNotEmpty) return false;
+
+    if (EstadosViaje.esPendientePago(estado)) return true;
+
+    final DateTime? acceptAfter = _fechaDocViaje(d['acceptAfter']);
+    final DateTime? publishAt = _fechaDocViaje(d['publishAt']);
+    final bool acceptAbierto =
+        acceptAfter == null || !ref.isBefore(acceptAfter);
+    final bool publishAbierto =
+        publishAt == null || !ref.isBefore(publishAt);
+    return !acceptAbierto || !publishAbierto;
+  }
+
+  /// Cancelación directa y rápida: reserva programada antes del pool (sin CF obligatoria).
+  static Future<void> cancelarReservaProgramadaPrePoolRadical({
+    required String viajeId,
+    required String uidCliente,
+    String? motivo,
+    Map<String, dynamic>? docHint,
+  }) async {
+    Map<String, dynamic>? doc = docHint;
+    try {
+      doc ??= await leerViajeServidor(viajeId)
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {}
+
+    if (doc != null) {
+      final String estado =
+          EstadosViaje.normalizar((doc['estado'] ?? '').toString());
+      if (EstadosViaje.esCancelado(estado)) {
+        await _limpiarRefsClienteTrasCancelar(uidCliente, viajeId);
+        return;
+      }
+      if (!esReservaProgramadaAntesDelPool(doc) &&
+          !EstadosViaje.esPendientePago(estado)) {
+        await cancelarPorCliente(
+          viajeId: viajeId,
+          uidCliente: uidCliente,
+          motivo: motivo,
+        ).timeout(const Duration(seconds: 20));
+        return;
+      }
+    }
+
+    try {
+      await _cancelarPorClienteLocalFallback(
+        viajeId: viajeId,
+        uidCliente: uidCliente,
+        motivo: motivo,
+      ).timeout(const Duration(seconds: 12));
+      return;
+    } on Exception catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('cerrado') || msg.contains('cancelado')) {
+        await _limpiarRefsClienteTrasCancelar(uidCliente, viajeId);
+        return;
+      }
+    } catch (_) {}
+
+    await cancelarPorCliente(
+      viajeId: viajeId,
+      uidCliente: uidCliente,
+      motivo: motivo,
+    ).timeout(const Duration(seconds: 20));
+  }
+
+  static Future<void> _limpiarRefsClienteTrasCancelar(
+    String uidCliente,
+    String viajeId,
+  ) async {
+    try {
+      await _db.collection('usuarios').doc(uidCliente).set(
+        <String, dynamic>{
+          'viajeActivoId': '',
+          'siguienteViajeId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'actualizadoEn': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    } catch (_) {}
+  }
+
+  /// Misma regla que [cancelarViajeClienteSeguro] en Functions.
+  static bool clienteCancelableSegunDoc(Map<String, dynamic> d) {
+    final String estadoRaw = (d['estado'] ?? '').toString();
+    final String n = EstadosViaje.normalizar(estadoRaw);
+    if (EstadosViaje.esCancelado(n) || EstadosViaje.esCompletado(n)) {
+      return false;
+    }
+    if (d['completado'] == true) return false;
+    if (EstadosViaje.esEstadoSinCancelacionApp(estadoRaw)) return false;
+    return n == EstadosViaje.pendiente ||
+        n == EstadosViaje.pendientePago ||
+        n == 'pendiente_admin' ||
+        n == 'buscando' ||
+        n == 'disponible' ||
+        n == EstadosViaje.aceptado ||
+        n == EstadosViaje.enCaminoPickup;
+  }
+
+  static String mensajeErrorCancelarCliente(Object e) {
+    if (e is FirebaseFunctionsException) {
+      final msg = (e.message ?? '').trim();
+      if (msg.isNotEmpty) return msg;
+      switch (e.code) {
+        case 'failed-precondition':
+          return 'No se puede cancelar este viaje en su estado actual.';
+        case 'permission-denied':
+          return 'No tienes permiso para cancelar este viaje.';
+        case 'not-found':
+          return 'El viaje ya no existe.';
+        default:
+          return 'No se pudo cancelar la reserva. Intenta de nuevo.';
+      }
+    }
+    final s = e.toString();
+    final failedIdx = s.indexOf('failed-precondition');
+    if (failedIdx >= 0) {
+      final bracket = s.indexOf(']', failedIdx);
+      if (bracket >= 0 && bracket + 1 < s.length) {
+        final tail = s.substring(bracket + 1).trim();
+        if (tail.isNotEmpty) {
+          return tail.split('\n').first.trim();
+        }
+      }
+    }
+    if (s.contains('El viaje ya está cerrado') ||
+        s.contains('El viaje ya finalizó')) {
+      return 'Este viaje ya fue cancelado o finalizado.';
+    }
+    return 'No se pudo cancelar la reserva. Intenta de nuevo.';
+  }
+
   static Future<void> cancelarPorCliente({
     required String viajeId,
     required String uidCliente,
@@ -2696,13 +4228,41 @@ class ViajesRepo {
     final String idemKey =
         'cancel_cli_${viajeId}_${uidCliente}_${DateTime.now().millisecondsSinceEpoch}';
     try {
-      await callable.call(<String, dynamic>{
+      await callable
+          .call(<String, dynamic>{
         'viajeId': viajeId,
         'motivo': (motivo ?? '').trim(),
         'idempotencyKey': idemKey,
-      });
+      })
+          .timeout(const Duration(seconds: 20));
       return;
     } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'failed-precondition') {
+        final msg = (e.message ?? '').toLowerCase();
+        if (msg.contains('cerrado') ||
+            msg.contains('cancelado') ||
+            msg.contains('finaliz')) {
+          try {
+            final fresh = await leerViajeServidor(viajeId);
+            if (fresh != null) {
+              final n = EstadosViaje.normalizar(
+                  (fresh['estado'] ?? '').toString());
+              if (EstadosViaje.esCancelado(n)) return;
+            }
+          } catch (_) {}
+        }
+        try {
+          final fresh = await leerViajeServidor(viajeId);
+          if (fresh != null && clienteCancelableSegunDoc(fresh)) {
+            await _cancelarPorClienteLocalFallback(
+              viajeId: viajeId,
+              uidCliente: uidCliente,
+              motivo: motivo,
+            );
+            return;
+          }
+        } catch (_) {}
+      }
       if (e.code == 'unavailable' ||
           e.code == 'deadline-exceeded' ||
           e.code == 'internal' ||
@@ -2715,6 +4275,12 @@ class ViajesRepo {
         return;
       }
       rethrow;
+    } on TimeoutException {
+      await _cancelarPorClienteLocalFallback(
+        viajeId: viajeId,
+        uidCliente: uidCliente,
+        motivo: motivo,
+      );
     }
   }
 
@@ -2739,7 +4305,8 @@ class ViajesRepo {
 
       final String estado = (d['estado'] ?? '').toString();
       final n = EstadosViaje.normalizar(estado);
-      if (n == EstadosViaje.completado || n == EstadosViaje.cancelado) {
+      if (EstadosViaje.esCancelado(n)) return;
+      if (n == EstadosViaje.completado || d['completado'] == true) {
         throw Exception('El viaje ya está cerrado.');
       }
       if (EstadosViaje.esEstadoSinCancelacionApp(estado)) {
@@ -2748,6 +4315,8 @@ class ViajesRepo {
       final bool cancelablePorCliente = n == EstadosViaje.pendiente ||
           n == EstadosViaje.pendientePago ||
           n == 'pendiente_admin' ||
+          n == 'buscando' ||
+          n == 'disponible' ||
           n == EstadosViaje.aceptado ||
           n == EstadosViaje.enCaminoPickup;
       if (!cancelablePorCliente) {
@@ -2762,6 +4331,7 @@ class ViajesRepo {
         'aceptado': false,
         'rechazado': true,
         'activo': false,
+        'republicado': false,
         'uidTaxista': '',
         'taxistaId': '',
         'nombreTaxista': '',
@@ -2778,23 +4348,7 @@ class ViajesRepo {
       });
     });
 
-    try {
-      await _db.collection('usuarios').doc(uidCliente).set(
-        {
-          'viajeActivoId': '',
-          'siguienteViajeId': '',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'actualizadoEn': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-    } catch (e, st) {
-      await ErrorReporting.reportError(
-        e,
-        stack: st,
-        context: 'cancelarPorCliente: limpiar viajeActivoId del cliente',
-      );
-    }
+    await _limpiarRefsClienteTrasCancelar(uidCliente, viajeId);
 
     // El trigger onViajeCanceladoPorCliente limpia al taxista (Admin SDK).
     // No escribir usuarios/{taxista} desde el cliente (permission-denied).
@@ -2942,7 +4496,46 @@ class ViajesRepo {
           _diag('cliente stream emit doc=$id');
           controller.add(Viaje.fromMap(vSnap.id, data));
         },
-        onError: controller.addError,
+        onError: (Object e) async {
+          final String err = e.toString().toLowerCase();
+          if (!err.contains('permission-denied')) {
+            controller.addError(e);
+            return;
+          }
+          _diag('cliente stream permission-denied doc=$id → query fallback');
+          await cancelAll();
+          lastViajeId = null;
+          viajeQuerySub = _col
+              .where('uidCliente', isEqualTo: uidCliente)
+              .where('estado', whereIn: [
+                EstadosViaje.pendiente,
+                'buscando',
+                EstadosViaje.pendientePago,
+                'pendiente_admin',
+                'asignado',
+                EstadosViaje.aceptado,
+                'en_camino',
+                EstadosViaje.enCaminoPickup,
+                'en_camino_pickup',
+                EstadosViaje.aBordo,
+                EstadosViaje.enCurso,
+              ])
+              .orderBy('updatedAt', descending: true)
+              .limit(1)
+              .snapshots()
+              .listen(
+                (q) {
+                  if (q.docs.isEmpty) {
+                    controller.add(null);
+                    return;
+                  }
+                  controller.add(
+                    Viaje.fromMap(q.docs.first.id, q.docs.first.data()),
+                  );
+                },
+                onError: controller.addError,
+              );
+        },
       );
     }
 

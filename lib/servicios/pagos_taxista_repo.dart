@@ -274,7 +274,8 @@ class PagosTaxistaRepo {
     return disp + 1e-9 < minimo;
   }
 
-  /// Solo **efectivo**: comisión RAI desde prepago. Digital → liquidación semanal.
+  /// Efectivo o transferencia al conductor: comisión desde prepago.
+  /// Tarjeta / recaudo en cuenta RAI → liquidación semanal (RAI paga neto al taxista).
   static bool viajeAplicaComisionPrepago(Map<String, dynamic> viajeData) {
     if (viajeData['corporativo'] == true) return false;
     if ((viajeData['recaudoDestino'] ?? '').toString() ==
@@ -286,11 +287,17 @@ class PagosTaxistaRepo {
       return false;
     }
     if (viajeData['exentoBloqueoPrepago'] == true) return false;
+    if ((viajeData['categoria'] ?? '').toString().trim().toLowerCase() ==
+        'corporativo') {
+      return false;
+    }
     final String tipo =
         (viajeData['tipoServicio'] ?? 'normal').toString().trim().toLowerCase();
     if (tipo == 'bola_ahorro') return false;
+    if (MetodoPagoViaje.viajeRecaudoEnCuentaRai(viajeData)) return false;
     final String? metodo = viajeData['metodoPago']?.toString();
     if (MetodoPagoViaje.esEfectivo(metodo)) return true;
+    if (MetodoPagoViaje.esTransferencia(metodo)) return true;
     return (metodo ?? '').trim().isEmpty;
   }
 
@@ -401,6 +408,10 @@ class PagosTaxistaRepo {
     if (ComisionPrepagoConfigService.permitirViajeConPrepagoParcial) {
       return null;
     }
+    // Turismo: aceptar → viaje → descontar prepago; el faltante va a comisionPendiente.
+    final String tipoSrv =
+        (viajeData['tipoServicio'] ?? '').toString().trim().toLowerCase();
+    if (tipoSrv == 'turismo') return null;
     if (!viajeAplicaComisionPrepago(viajeData)) return null;
     final double pend = comisionPendienteDesdeBilletera(billeData);
     final exigeComision15 = viajeEsNegocioAliadoReferido(viajeData);
@@ -599,38 +610,57 @@ class PagosTaxistaRepo {
   static CollectionReference<Map<String, dynamic>> get _recargasCol =>
       _db.collection('recargas_comision_taxista');
 
+  /// Tope de cola en vivo para ADM (evita listeners sobre todo el historial).
+  static const int limiteRecargasColaAdmin = 200;
+
+  /// Tope de historial que ADM carga en vivo; el filtrado fino es en pantalla.
+  static const int limiteRecargasHistorialAdmin = 300;
+
+  static List<RecargaComisionTaxista> _recargasOrdenadasDesc(
+    QuerySnapshot<Map<String, dynamic>> snap,
+  ) {
+    final list = snap.docs.map(RecargaComisionTaxista.fromDoc).toList();
+    list.sort((a, b) {
+      final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return tb.compareTo(ta);
+    });
+    return list;
+  }
+
   static Stream<List<RecargaComisionTaxista>>
-      streamRecargasComisionPendientesAdmin() {
+      streamRecargasComisionPendientesAdmin({
+    int limite = limiteRecargasColaAdmin,
+  }) {
     return _recargasCol
         .where('estado', isEqualTo: 'pendiente_verificacion')
+        .limit(limite)
         .snapshots()
-        .map((snap) {
-      final list = snap.docs.map(RecargaComisionTaxista.fromDoc).toList();
-      list.sort((a, b) {
-        final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return tb.compareTo(ta);
-      });
-      return list;
-    });
+        .map(_recargasOrdenadasDesc);
+  }
+
+  /// Historial ADM acotado a las últimas [limite] recargas por fecha.
+  static Stream<List<RecargaComisionTaxista>> streamRecargasComisionAdmin({
+    int limite = limiteRecargasHistorialAdmin,
+  }) {
+    return _recargasCol
+        .orderBy('createdAt', descending: true)
+        .limit(limite)
+        .snapshots()
+        .map((snap) => snap.docs.map(RecargaComisionTaxista.fromDoc).toList());
   }
 
   static Stream<List<RecargaComisionTaxista>> streamRecargasComisionPorTaxista(
-      String uidTaxista) {
+    String uidTaxista, {
+    int limite = 50,
+  }) {
     final u = uidTaxista.trim();
     if (u.isEmpty) return Stream.value(<RecargaComisionTaxista>[]);
     return _recargasCol
         .where('uidTaxista', isEqualTo: u)
+        .limit(limite)
         .snapshots()
-        .map((snap) {
-      final list = snap.docs.map(RecargaComisionTaxista.fromDoc).toList();
-      list.sort((a, b) {
-        final ta = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final tb = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return tb.compareTo(ta);
-      });
-      return list;
-    });
+        .map(_recargasOrdenadasDesc);
   }
 
   static Future<void> taxistaEnviarRecargaComisionEfectivo({

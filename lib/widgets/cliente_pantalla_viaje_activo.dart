@@ -4,7 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/pantallas/cliente/espera_asignacion_turismo.dart';
 import 'package:flygo_nuevo/pantallas/cliente/viaje_en_curso_cliente.dart';
+import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/asignacion_turismo_repo.dart';
+import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
 /// Decide qué pantalla mostrar cuando [ClienteShell] detecta `viajeActivoId`.
 class ClientePantallaViajeActivo extends StatelessWidget {
@@ -60,6 +62,15 @@ class ClientePantallaViajeActivo extends StatelessWidget {
               );
             }
             final Map<String, dynamic> data = viajeSnap.data!.data()!;
+            if (ViajePoolTaxistaGate.esReservaProgramadaLejana(data)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                ActiveTripService.liberarReservaProgramadaLejanaEnHome(
+                  viajeId: viajeId,
+                );
+                ActiveTripService.notificarRebuildShell();
+              });
+              return const SizedBox.shrink();
+            }
             final bool esperaTurismo = debeMostrarEsperaTurismo(data);
             return AnimatedSwitcher(
               duration: const Duration(milliseconds: 280),
@@ -69,6 +80,7 @@ class ClientePantallaViajeActivo extends StatelessWidget {
                   ? EsperaAsignacionTurismo(
                       key: ValueKey<String>('espera_turismo_$viajeId'),
                       viajeId: viajeId,
+                      delegarTransicionEnCursoAlRouter: true,
                     )
                   : ViajeEnCursoCliente(
                       key: viajeEnCursoKey ??

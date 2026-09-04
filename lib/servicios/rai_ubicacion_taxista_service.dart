@@ -72,13 +72,13 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
         _programarRefrescar();
       });
     } catch (_) {}
-    await refrescar();
+    await refrescar(forzar: true);
   }
 
-  void _programarRefrescar() {
+  void _programarRefrescar({bool forzar = false}) {
     _refreshDebounce?.cancel();
     _refreshDebounce = Timer(const Duration(milliseconds: 450), () {
-      unawaited(refrescar());
+      unawaited(refrescar(forzar: forzar));
     });
   }
 
@@ -96,7 +96,7 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _programarRefrescar();
+      _programarRefrescar(forzar: true);
       unawaited(_continuarActivacionSiUsuarioVolvioDeAjustes());
     }
   }
@@ -146,9 +146,10 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
     }
   }
 
-  Future<void> refrescar() async {
+  Future<void> refrescar({bool forzar = false}) async {
     final DateTime ahora = DateTime.now();
-    if (ahora.difference(_ultimoRefresco) < const Duration(seconds: 2)) {
+    if (!forzar &&
+        ahora.difference(_ultimoRefresco) < const Duration(milliseconds: 800)) {
       return;
     }
     _ultimoRefresco = ahora;
@@ -172,8 +173,11 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
           next = RaiUbicacionTaxistaModo.listo;
           feedbackSinUbicacion.value = null;
           await _marcarListoEnPrefs();
-        } else if (modo.value == RaiUbicacionTaxistaModo.listo) {
-          return;
+        } else if (modo.value == RaiUbicacionTaxistaModo.listo ||
+            await _gpsRespondeTrasConcesionPrevia()) {
+          next = RaiUbicacionTaxistaModo.listo;
+          feedbackSinUbicacion.value = null;
+          await _marcarListoEnPrefs();
         } else {
           next = RaiUbicacionTaxistaModo.permisoPendiente;
         }
@@ -192,10 +196,26 @@ class RaiUbicacionTaxistaService with WidgetsBindingObserver {
 
     if (next == RaiUbicacionTaxistaModo.listo) {
       feedbackSinUbicacion.value = null;
+      await LocationPermissionService.limpiarUbicacionDenegadaTrasBanner();
+      await LocationPermissionService.limpiarActivacionDesdeAppRai();
       return;
     }
 
     await _restaurarFeedbackDenegadoSiCorresponde(next);
+  }
+
+  /// Si ya concedió antes y el teléfono tiene GPS activo, confiar en última posición
+  /// conocida (evita pedir «Activar ubicación» otra vez al reabrir la app).
+  Future<bool> _gpsRespondeTrasConcesionPrevia() async {
+    try {
+      final Position? pos = await Geolocator.getLastKnownPosition();
+      return pos != null &&
+          pos.latitude.isFinite &&
+          pos.longitude.isFinite &&
+          !(pos.latitude == 0 && pos.longitude == 0);
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _restaurarFeedbackDenegadoSiCorresponde(

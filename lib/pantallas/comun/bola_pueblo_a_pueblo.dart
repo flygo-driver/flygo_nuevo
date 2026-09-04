@@ -11,6 +11,7 @@ import 'package:flygo_nuevo/servicios/navigation_service.dart';
 import 'package:flygo_nuevo/utilidades/constante.dart' show etiquetaBolaAhorroUi;
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/navegacion/taxista_finanzas_nav.dart';
+import 'package:flygo_nuevo/widgets/bola_en_desarrollo_aviso.dart';
 import 'package:flygo_nuevo/widgets/mapa_tiempo_real.dart';
 import 'package:flygo_nuevo/widgets/rai_header_logo.dart';
 
@@ -353,6 +354,7 @@ class _BolaPuebloAPuebloPageState extends State<BolaPuebloAPuebloPage> {
                                 ),
                               ),
                             ),
+                            BolaEnDesarrolloAviso.banner(),
                             Padding(
                               padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
                               child: BolaPuebloUi.boardHeader(

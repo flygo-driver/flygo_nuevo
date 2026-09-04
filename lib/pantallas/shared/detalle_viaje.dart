@@ -1,4 +1,6 @@
 // lib/pantallas/shared/detalle_viaje.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,7 +10,7 @@ import '../../modelo/viaje.dart';
 import '../../utils/formatos_moneda.dart';
 import '../../utils/telefono_viaje.dart';
 import '../../utils/calculos/estados.dart';
-import '../chat/chat_screen.dart';
+import 'package:flygo_nuevo/utils/chat_viaje_nav.dart';
 import 'boarding_pin_sheet.dart';
 
 class DetalleViaje extends StatefulWidget {
@@ -124,16 +126,15 @@ class _DetalleViajeState extends State<DetalleViaje> {
                           icon: const Icon(Icons.message,
                               color: Colors.blueAccent),
                           onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ChatScreen(
-                                  otroUid: uid,
-                                  otroNombre: nombre,
-                                  viajeId: widget.viajeId,
-                                ),
-                              ),
-                            );
+                            final miUid =
+                                FirebaseAuth.instance.currentUser?.uid ?? '';
+                            unawaited(ChatViajeNav.abrir(
+                              context: context,
+                              miUid: miUid,
+                              otroUid: uid,
+                              otroNombre: nombre,
+                              viajeId: widget.viajeId,
+                            ));
                           },
                         ),
                     ],

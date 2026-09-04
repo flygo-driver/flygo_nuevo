@@ -168,7 +168,7 @@ class FcmService {
     if (nav == null || !nav.mounted) return;
 
     if (isCliente) {
-      await NavigationService.clearAndGoViajeEnCursoCliente(preNav: nav);
+      NavigationService.retomarViajeActivoCliente();
     } else {
       await NavigationService.clearAndGoViajeEnCursoTaxista(preNav: nav);
     }

@@ -7,6 +7,7 @@ class RaiLocalReadCache {
 
   static const String _kViaje = 'rai_cache_viaje_activo_';
   static const String _kSaldo = 'rai_cache_saldo_prepago_';
+  static const String _kClientePausaViaje = 'rai_cache_cliente_pausa_viaje_';
 
   static Future<void> rememberActiveTripId(String uid, String viajeId) async {
     final u = uid.trim();
@@ -29,6 +30,32 @@ class RaiLocalReadCache {
     if (u.isEmpty) return;
     final p = await SharedPreferences.getInstance();
     await p.remove('$_kViaje$u');
+  }
+
+  /// Cliente pulsó atrás en viaje en curso: recordar pausa para no reabrir overlay al cold start.
+  static Future<void> rememberClientePausaVoluntaria(
+    String uid,
+    String viajeId,
+  ) async {
+    final u = uid.trim();
+    final v = viajeId.trim();
+    if (u.isEmpty || v.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString('$_kClientePausaViaje$u', v);
+  }
+
+  static Future<String?> lastKnownClientePausaVoluntaria(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return null;
+    final p = await SharedPreferences.getInstance();
+    return p.getString('$_kClientePausaViaje$u');
+  }
+
+  static Future<void> clearClientePausaVoluntaria(String uid) async {
+    final u = uid.trim();
+    if (u.isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    await p.remove('$_kClientePausaViaje$u');
   }
 
   static Future<void> rememberSaldoPrepago(String uid, double saldoRd) async {
