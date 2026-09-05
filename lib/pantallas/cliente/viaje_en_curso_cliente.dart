@@ -1743,7 +1743,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
                   icon: Icons.phone,
                   label: 'Llamar',
                   onPressed: () async {
-                    final String tc = telefonoNormalizarDigitos(telCond);
+                    final String tc = await _digitosTelefonoConductor(v);
                     if (tc.isEmpty) {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1771,7 +1771,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
                   icon: Icons.chat_bubble_outline,
                   label: 'WhatsApp',
                   onPressed: () async {
-                    final String tc = telefonoNormalizarDigitos(telCond);
+                    final String tc = await _digitosWhatsAppConductor(v);
                     if (tc.isEmpty) {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1894,10 +1894,55 @@ static const double _kViajeSheetMinMultiparada = 0.30;
     );
   }
 
+  Future<String> _digitosTelefonoConductor(Viaje v) async {
+    String raw = telefonoConductorCombinado(
+      viajeData: <String, dynamic>{
+        'telefonoTaxista': v.telefonoTaxista,
+        'telefono': v.telefono,
+      },
+    );
+    if (raw.isEmpty && v.uidTaxista.trim().isNotEmpty) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> snap =
+            await FirebaseFirestore.instance
+                .collection('usuarios')
+                .doc(v.uidTaxista.trim())
+                .get();
+        raw = telefonoContactoDesdePerfilUsuario(
+          snap.data() ?? <String, dynamic>{},
+        );
+      } catch (_) {}
+    }
+    return telefonoNormalizarDigitos(raw);
+  }
+
+  Future<String> _digitosWhatsAppConductor(Viaje v) async {
+    final String desdeViaje = telefonoDesdeSnapshotViajeTaxista(
+      <String, dynamic>{
+        'telefonoTaxista': v.telefonoTaxista,
+        'telefono': v.telefono,
+      },
+    );
+    if (desdeViaje.isNotEmpty) {
+      return telefonoNormalizarDigitos(desdeViaje);
+    }
+    if (v.uidTaxista.trim().isEmpty) return '';
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('usuarios')
+              .doc(v.uidTaxista.trim())
+              .get();
+      return telefonoNormalizarDigitos(
+        telefonoWhatsAppDesdePerfilUsuario(snap.data() ?? <String, dynamic>{}),
+      );
+    } catch (_) {
+      return '';
+    }
+  }
+
   Future<void> _llamarConductorCliente(Viaje v) async {
-    final String telCond =
-        v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono.trim();
-    final String tc = telefonoNormalizarDigitos(telCond);
+    final String tc = await _digitosTelefonoConductor(v);
     if (tc.isEmpty) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1917,9 +1962,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
   }
 
   Future<void> _whatsAppConductorCliente(Viaje v) async {
-    final String telCond =
-        v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono.trim();
-    final String tc = telefonoNormalizarDigitos(telCond);
+    final String tc = await _digitosWhatsAppConductor(v);
     if (tc.isEmpty) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -5733,10 +5776,13 @@ static const double _kViajeSheetMinMultiparada = 0.30;
 
         final String telFromViaje =
             v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono;
-        String tel = telFromViaje.trim();
-        if (tel.isEmpty) {
-          tel = telefonoCrudoDesdeMapa(tx);
-        }
+        String tel = telefonoConductorCombinado(
+          viajeData: <String, dynamic>{
+            'telefonoTaxista': telFromViaje,
+            'telefono': v.telefono,
+          },
+          perfilTaxista: tx,
+        );
 
         final String tipo = _s(v.tipoVehiculo).trim().isNotEmpty
             ? _s(v.tipoVehiculo).trim()
@@ -6000,10 +6046,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
                         icon: Icons.phone,
                         label: 'Llamar',
                         onPressed: () async {
-                          final String raw = tel.trim().isNotEmpty
-                              ? tel
-                              : telefonoCrudoDesdeMapa(tx);
-                          final String tc = telefonoNormalizarDigitos(raw);
+                          final String tc = await _digitosTelefonoConductor(v);
                           if (tc.isEmpty) {
                             if (!context.mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -6031,10 +6074,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
                         icon: Icons.chat_bubble_outline,
                         label: 'WhatsApp',
                         onPressed: () async {
-                          final String raw = tel.trim().isNotEmpty
-                              ? tel
-                              : telefonoCrudoDesdeMapa(tx);
-                          final String tc = telefonoNormalizarDigitos(raw);
+                          final String tc = await _digitosWhatsAppConductor(v);
                           if (tc.isEmpty) {
                             if (!context.mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -6249,9 +6289,7 @@ static const double _kViajeSheetMinMultiparada = 0.30;
   Future<void> _abrirWhatsAppPago({
     required Viaje v,
   }) async {
-    final String telClean = telefonoNormalizarDigitos(
-      v.telefonoTaxista.isNotEmpty ? v.telefonoTaxista : v.telefono,
-    );
+    final String telClean = await _digitosWhatsAppConductor(v);
     if (telClean.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

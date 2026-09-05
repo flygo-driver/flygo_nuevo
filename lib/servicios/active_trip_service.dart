@@ -728,14 +728,18 @@ class ActiveTripService {
   static bool get clientePostViajeEnHome =>
       debeForzarInicioClienteShell && flujoPostViajeClienteActivo;
 
-  /// Banner de rescate: viaje operativo pero overlay no visible (fallo UI).
+  /// Banner de rescate: solo reserva programada lejana en home («Ver reserva»).
+  /// Viaje operativo (multiparada, en curso, etc.) → overlay automático, sin «Retomar».
   static bool get debeMostrarBannerRecuperacionViaje {
     if (flujoPostViajeClienteActivo) return false;
     if (clienteSuprimirOverlayViajeActivo) return false;
     if (debeMantenerOverlayViajeEnShell) return false;
     if (retomarClienteEnCurso) return false;
     final String vid = resolverViajeIdClienteParaPausa();
-    return vid.isNotEmpty && !viajeClienteDescartadoEnSesion(vid);
+    if (vid.isEmpty || viajeClienteDescartadoEnSesion(vid)) return false;
+    final Map<String, dynamic>? peek = peekResumenViajeCliente(vid);
+    return peek != null &&
+        ViajePoolTaxistaGate.esReservaProgramadaLejana(peek);
   }
 
   static void activarPausaVoluntariaClienteShell({String? viajeId}) {
@@ -832,30 +836,36 @@ class ActiveTripService {
     notificarRebuildShell();
   }
 
-  static void sembrarViajeClienteParaRetomarEnHome(
+  /// Viaje operativo: overlay pegado. Nunca banner «Retomar» en home.
+  static void prepararOverlayViajeOperativoCliente(
     String viajeId, {
     Map<String, dynamic>? docHint,
   }) {
     final String id = viajeId.trim();
     if (id.isEmpty || flujoPostViajeClienteBloquea(id)) return;
-    final Map<String, dynamic>? d =
-        docHint ?? peekResumenViajeCliente(id);
+    final Map<String, dynamic>? d = docHint ?? peekResumenViajeCliente(id);
     if (d != null &&
         ViajePoolTaxistaGate.esReservaProgramadaLejana(d)) {
       liberarReservaProgramadaLejanaEnHome(viajeId: id);
+      if (d.isNotEmpty) sembrarBootstrapViajeCliente(id, d);
       return;
     }
-    _viajeOperativoClienteConocido = id;
-    _viajeIdPausaVoluntariaCliente = id;
-    _bannerPausaGraciaHastaMs =
-        DateTime.now().add(const Duration(minutes: 10)).millisecondsSinceEpoch;
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null && uid.trim().isNotEmpty) {
-      unawaited(
-        RaiLocalReadCache.rememberClientePausaVoluntaria(uid.trim(), id),
-      );
+    registrarViajeOperativoCliente(id);
+    cancelarForzarInicioClienteShell();
+    _viajeIdPausaVoluntariaCliente = '';
+    mantenerOverlayViajeEnShell(const Duration(minutes: 30));
+    if (d != null && d.isNotEmpty) {
+      sembrarBootstrapViajeCliente(id, d);
     }
+    _bannerPausaGraciaHastaMs = 0;
     notificarRebuildShell();
+  }
+
+  static void sembrarViajeClienteParaRetomarEnHome(
+    String viajeId, {
+    Map<String, dynamic>? docHint,
+  }) {
+    prepararOverlayViajeOperativoCliente(viajeId, docHint: docHint);
   }
 
   /// Resuelve viaje activo del cliente (query + caché) y prepara overlay o retomar.
@@ -878,7 +888,7 @@ class ActiveTripService {
             liberarReservaProgramadaLejanaEnHome(viajeId: cached);
             return cached;
           }
-          sembrarViajeClienteParaRetomarEnHome(cached, docHint: peek);
+          prepararOverlayViajeOperativoCliente(cached, docHint: peek);
           return cached;
         }
         return null;

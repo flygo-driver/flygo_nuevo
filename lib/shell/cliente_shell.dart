@@ -276,6 +276,31 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
           }
           return;
         }
+        if (!ActiveTripService.clienteSuprimirOverlayViajeActivo) {
+          final String vid =
+              ActiveTripService.viajeOperativoClienteConocido;
+          if (vid.isNotEmpty &&
+              !ActiveTripService.flujoPostViajeClienteBloquea(vid)) {
+            final Map<String, dynamic>? peek =
+                ActiveTripService.peekResumenViajeCliente(vid);
+            final bool reservaLejana = peek != null &&
+                ViajePoolTaxistaGate.esReservaProgramadaLejana(peek);
+            if (!reservaLejana) {
+              if (!ActiveTripService.debeMantenerOverlayViajeEnShell) {
+                ActiveTripService.mantenerOverlayViajeEnShell(
+                  const Duration(minutes: 30),
+                );
+              }
+              if (_viajeActivoShell != true) {
+                print(
+                  '[VIAJE_ACTIVO] cliente_shell rebuild tick → overlay auto',
+                );
+                setState(() => _viajeActivoShell = true);
+              }
+              return;
+            }
+          }
+        }
         if (!ActiveTripService.debeMantenerOverlayViajeEnShell) return;
         if (_viajeActivoShell != true) {
           print('[VIAJE_ACTIVO] cliente_shell rebuild tick → overlay viaje');
@@ -555,9 +580,16 @@ class _ClienteShellScaffoldState extends State<_ClienteShellScaffold> {
               docQuery.data() ?? <String, dynamic>{},
               uid,
             )) {
-          ActiveTripService.sembrarViajeClienteParaRetomarEnHome(
+          mostrarViaje = true;
+          ActiveTripService.prepararOverlayViajeOperativoCliente(
             docQuery.id,
             docHint: docQuery.data(),
+          );
+          unawaited(
+            RaiLocalReadCache.rememberActiveTripId(uid, docQuery.id),
+          );
+          print(
+            '[VIAJE_ACTIVO] cliente_shell bootstrap → overlay query tardía id=${docQuery.id}',
           );
         } else if (mostrarViaje && cachedId.isNotEmpty) {
           bool sigue = true;

@@ -91,6 +91,56 @@ String telefonoCrudoDesdeMapa(Map<String, dynamic> m) {
   return '';
 }
 
+/// Perfil `usuarios/{uid}` (cliente o taxista): teléfono real del registro.
+String telefonoContactoDesdePerfilUsuario(Map<String, dynamic> m) {
+  const List<String> keys = <String>[
+    'telefono',
+    'phone',
+    'phoneNumber',
+    'celular',
+    'movil',
+    'telefonoMovil',
+    'whatsapp',
+    'whatsappNumber',
+    'numeroTelefono',
+    'telefonoContacto',
+    'mobile',
+  ];
+  for (final String k in keys) {
+    final Object? v = m[k];
+    if (v == null) continue;
+    final String s = v.toString().trim();
+    if (s.isNotEmpty) return s;
+  }
+  return '';
+}
+
+/// WhatsApp del perfil: campo dedicado si existe; si no, teléfono de contacto.
+String telefonoWhatsAppDesdePerfilUsuario(Map<String, dynamic> m) {
+  for (final String k in <String>['whatsapp', 'whatsappNumber']) {
+    final String s = (m[k] ?? '').toString().trim();
+    if (s.isNotEmpty) return s;
+  }
+  return telefonoContactoDesdePerfilUsuario(m);
+}
+
+/// Teléfono del taxista guardado en el doc del viaje (snapshot al aceptar).
+String telefonoDesdeSnapshotViajeTaxista(Map<String, dynamic> viajeData) {
+  final String tt = (viajeData['telefonoTaxista'] ?? '').toString().trim();
+  if (tt.isNotEmpty) return tt;
+  return (viajeData['telefono'] ?? '').toString().trim();
+}
+
+/// Llamada / WhatsApp al conductor: viaje primero, luego perfil vivo en `usuarios`.
+String telefonoConductorCombinado({
+  required Map<String, dynamic> viajeData,
+  Map<String, dynamic>? perfilTaxista,
+}) {
+  final String desdeViaje = telefonoDesdeSnapshotViajeTaxista(viajeData);
+  if (desdeViaje.isNotEmpty) return desdeViaje;
+  return telefonoContactoDesdePerfilUsuario(perfilTaxista ?? <String, dynamic>{});
+}
+
 /// Misma forma en toda la app: `tel:+<digitos>`.
 Uri telefonoUriLlamada(String digitosNormalizados) =>
     Uri.parse('tel:+$digitosNormalizados');

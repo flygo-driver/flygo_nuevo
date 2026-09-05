@@ -10,7 +10,8 @@ import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/utils/calculos/estados.dart';
 import 'package:flygo_nuevo/utils/viaje_pool_taxista_gate.dart';
 
-/// Banner persistente cuando el cliente pausó un viaje activo y está en el home.
+/// Banner persistente cuando hay reserva programada lejana en home («Ver reserva»).
+/// Viajes operativos entran solos al overlay; este widget no muestra «Retomar».
 class ClienteViajeActivoRetomarBanner extends StatefulWidget {
   const ClienteViajeActivoRetomarBanner({
     super.key,

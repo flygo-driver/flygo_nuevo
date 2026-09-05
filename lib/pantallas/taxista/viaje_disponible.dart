@@ -262,6 +262,10 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
+    });
     _tabPool = TabController(
       length: widget.ocultarTabCompartidos ? 2 : 3,
       vsync: this,

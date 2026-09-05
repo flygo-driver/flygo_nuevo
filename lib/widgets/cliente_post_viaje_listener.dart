@@ -29,9 +29,11 @@ class ClientePostViajeListener extends StatefulWidget {
 class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subCompletados;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subUsuario;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subViajeActivo;
   bool _primeraEmisionCompletados = true;
   String? _ultimoViajeOfrecido;
   String? _ultimoViajeActivoId;
+  String? _viajeActivoEscuchado;
   bool _flujoPostViajeEnCurso = false;
 
   @override
@@ -79,6 +81,28 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
     );
   }
 
+  void _sincronizarEscuchaViajeActivo(String viajeActivoId) {
+    final String vid = viajeActivoId.trim();
+    if (vid == _viajeActivoEscuchado) return;
+    _subViajeActivo?.cancel();
+    _viajeActivoEscuchado = vid.isEmpty ? null : vid;
+    if (vid.isEmpty) return;
+
+    _subViajeActivo = FirebaseFirestore.instance
+        .collection('viajes')
+        .doc(vid)
+        .snapshots()
+        .listen(
+      (DocumentSnapshot<Map<String, dynamic>> snap) {
+        if (!snap.exists) return;
+        final Map<String, dynamic> d = snap.data() ?? <String, dynamic>{};
+        if (!_viajeCompletado(d)) return;
+        unawaited(_ofrecerPostViajeSiCorresponde(vid, d));
+      },
+      onError: (_) {},
+    );
+  }
+
   bool _viajeCompletado(Map<String, dynamic> d) {
     if (d['completado'] != true) return false;
     final String st = EstadosViaje.normalizar((d['estado'] ?? '').toString());
@@ -101,8 +125,10 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
     final String vid = (snap.data()?['viajeActivoId'] ?? '').toString().trim();
     if (vid.isNotEmpty) {
       _ultimoViajeActivoId = vid;
+      _sincronizarEscuchaViajeActivo(vid);
       return;
     }
+    _sincronizarEscuchaViajeActivo('');
     final String lost = (_ultimoViajeActivoId ?? '').trim();
     if (lost.isEmpty) return;
     _ultimoViajeActivoId = null;
@@ -182,12 +208,15 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
         viajeId,
         viajeData: data,
       )) {
+        _ultimoViajeOfrecido = null;
         return;
       }
       final NavigatorState? nav = NavigationService.navigatorKey.currentState;
-      if (nav == null) return;
+      if (nav == null || !nav.mounted) {
+        _ultimoViajeOfrecido = null;
+        return;
+      }
 
-      if (!nav.mounted) return;
       ActiveTripService.prepararSalidaClientePostViaje(viajeId: viajeId);
       ClientePostViajeReopenGuard.markOpened(viajeId);
       await PostViajeClienteNav.abrirFacturaYFlujo(
@@ -211,6 +240,7 @@ class _ClientePostViajeListenerState extends State<ClientePostViajeListener> {
   void dispose() {
     _subCompletados?.cancel();
     _subUsuario?.cancel();
+    _subViajeActivo?.cancel();
     super.dispose();
   }
 

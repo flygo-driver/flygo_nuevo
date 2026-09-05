@@ -325,6 +325,12 @@ class NavigationService {
       (Route<dynamic> r) => false,
     );
     ActiveTripService.notificarRebuildShell();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final BuildContext? poolCtx = navigatorKey.currentContext;
+      if (poolCtx != null && poolCtx.mounted) {
+        ScaffoldMessenger.maybeOf(poolCtx)?.clearSnackBars();
+      }
+    });
   }
 
   static Future<void> clearAndGo(Widget page) async {

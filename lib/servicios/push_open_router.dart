@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flygo_nuevo/app_flavor.dart';
 import 'package:flygo_nuevo/pantallas/corporativo/corporativo_hub_page.dart';
 import 'package:flygo_nuevo/pantallas/taxista/mis_rutas_corporativas_page.dart';
+import 'package:flygo_nuevo/navegacion/post_viaje_cliente_nav.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/servicios/corporativo_encargado_deep_link.dart';
 import 'package:flygo_nuevo/servicios/fcm_service.dart';
@@ -73,6 +74,26 @@ abstract final class PushOpenRouter {
       if (_esEncargadoPush(data)) {
         await _abrirCorporativoEncargado(data);
       }
+      return;
+    }
+
+    if (type == 'viaje_completado') {
+      if (!isPasajeroCapableFlavor) return;
+      final String viajeId = (data['viajeId'] ?? '').toString().trim();
+      if (viajeId.isEmpty) return;
+      final User? u = await _usuarioTrasArranque();
+      if (u == null) return;
+      final snap = await _db.collection('viajes').doc(viajeId).get();
+      if (!snap.exists) return;
+      final Map<String, dynamic> vd = snap.data() ?? <String, dynamic>{};
+      final String cid =
+          (vd['uidCliente'] ?? vd['clienteId'] ?? '').toString().trim();
+      if (cid != u.uid) return;
+      ActiveTripService.prepararSalidaClientePostViaje(viajeId: viajeId);
+      await PostViajeClienteNav.abrirFacturaYFlujo(
+        viajeId: viajeId,
+        viajeDataSemilla: Map<String, dynamic>.from(vd),
+      );
       return;
     }
 

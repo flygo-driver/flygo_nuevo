@@ -45,6 +45,58 @@ function assertClienteCuentaReal(
   }
 }
 
+/** Paridad app: ClienteVerificacionIdentidadService.debeVerificarAhora */
+function esCuentaPasajeroSelfie(userData: AnyMap): boolean {
+  const rol = trimOrEmpty(userData.rol).toLowerCase();
+  if (rol === "cliente" || rol === "user" || rol === "") return true;
+  if (userData.registroClienteCompleto === true) return true;
+  if (trimOrEmpty(userData.verificacionIdentidadUrl)) return true;
+  if (userData.verificacionIdentidadEn != null) return true;
+  return false;
+}
+
+function selfieIntervaloMs(userData: AnyMap): number {
+  const d = userData.verificacionIdentidadIntervaloDias;
+  if (typeof d === "number" && Number.isFinite(d) && d >= 1 && d <= 365) {
+    return Math.round(d) * 86_400_000;
+  }
+  return 30 * 86_400_000;
+}
+
+function clienteDebeVerificarSelfie(userData: AnyMap): boolean {
+  if (!esCuentaPasajeroSelfie(userData)) return false;
+  const revision = trimOrEmpty(userData.verificacionIdentidadRevision).toLowerCase();
+  if (revision === "rechazada") return true;
+  const intervaloMs = selfieIntervaloMs(userData);
+  const now = Date.now();
+  const ultimaMs = tsToMs(userData.verificacionIdentidadEn);
+  if (ultimaMs != null) return now - ultimaMs >= intervaloMs;
+  const registroMs = tsToMs(userData.fechaRegistro) ?? tsToMs(userData.createdAt);
+  if (registroMs != null) return now - registroMs >= intervaloMs;
+  return true;
+}
+
+function assertClienteAptoParaCrearViaje(userData: AnyMap): void {
+  if (userData.bloqueado === true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Tu cuenta fue suspendida. Contacta soporte RAI para más información.",
+    );
+  }
+  if (userData.tieneCobroViajePendiente === true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
+    );
+  }
+  if (clienteDebeVerificarSelfie(userData)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Por seguridad, confirma que eres tú con una selfie para continuar.",
+    );
+  }
+}
+
 function esTerminal(estado: string): boolean {
   return TERMINAL.has(estado.trim().toLowerCase());
 }
@@ -365,12 +417,7 @@ export const crearViajePendienteCliente = onCall(async (request) => {
     await db().runTransaction(async (tx) => {
       const userSnap = await tx.get(userRef);
       const userData = (userSnap.data() ?? {}) as AnyMap;
-      if (userData.tieneCobroViajePendiente === true) {
-        throw new HttpsError(
-          "failed-precondition",
-          "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
-        );
-      }
+      assertClienteAptoParaCrearViaje(userData);
       const vid = trimOrEmpty(userData.viajeActivoId);
       let viajeActivoDoc: AnyMap | null = null;
       if (vid) {

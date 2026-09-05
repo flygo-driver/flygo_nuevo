@@ -41,6 +41,18 @@ Future<void> fcmFirebaseMessagingBackgroundHandler(RemoteMessage message) async 
       body: body.isEmpty ? 'Toca para abrir' : body,
       payload: payload,
     );
+    return;
+  }
+  if (type == 'viaje_completado') {
+    final title = message.notification?.title ?? 'Viaje finalizado';
+    final body = message.notification?.body ??
+        'Tu factura está lista. Toca para ver el resumen.';
+    await NotificationService.I.showTripCommsLocal(
+      title: title,
+      body: body,
+      payload: jsonEncode(data),
+      playSound: true,
+    );
   }
 }
 
@@ -101,6 +113,11 @@ class FcmService {
           cuerpo: body,
         );
       }
+      if (isPasajeroCapableFlavor && type == 'viaje_completado') {
+        unawaited(PushOpenRouter.handleOpenedPushData(
+          Map<String, dynamic>.from(m.data),
+        ));
+      }
     });
   }
 
@@ -126,6 +143,10 @@ class FcmService {
       final type = (map['type'] ?? '').toString();
       if (type == 'trip_chat_message' || type == 'trip_call_attempt') {
         unawaited(openTripFromPushData(map));
+        return;
+      }
+      if (type == 'viaje_completado') {
+        unawaited(PushOpenRouter.handleOpenedPushData(map));
         return;
       }
       unawaited(PushOpenRouter.handleOpenedPushData(map));

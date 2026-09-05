@@ -44,15 +44,7 @@ class TaxistaColaPostCompletar {
 
     if (outcome.hadPromotion && outcome.promotedViajeId != null) {
       if (context != null && context.mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(
-            content: Text(
-              '🏁 Viaje completado. Siguiente recogida: revisá forma de pago y PIN en la pantalla.',
-            ),
-            backgroundColor: Colors.blue,
-            duration: Duration(seconds: 4),
-          ),
-        );
+        ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
       }
       await NavigationService.clearAndGoViajeEnCursoTaxista();
       return;
@@ -147,6 +139,7 @@ class TaxistaColaPostCompletar {
       return;
     }
     if (context != null && context.mounted) {
+      ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
       await NavigationService.irAlInicioTaxista(
         context: context,
         viajeIdCompletado: viajeIdCompletado,

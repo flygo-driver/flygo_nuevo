@@ -15,6 +15,7 @@ class MultiparadaNavegacionTarjetaModel {
     this.visitado = false,
     this.navegadoEnSesion = false,
     this.confirmacionHabilitada = false,
+    this.destacarConfirmacion = false,
     this.onTap,
     this.onMarcarHecha,
     this.onConfirmarBloqueado,
@@ -31,16 +32,29 @@ class MultiparadaNavegacionTarjetaModel {
   final bool navegadoEnSesion;
   /// ✓ activo (Waze/Maps ya abierto o modo prueba).
   final bool confirmacionHabilitada;
+  /// Resalta solo la parada activa (la última abierta en Waze/Maps).
+  final bool destacarConfirmacion;
   final VoidCallback? onTap;
   final VoidCallback? onMarcarHecha;
   /// Al tocar ✓ antes de abrir Waze/Maps.
   final VoidCallback? onConfirmarBloqueado;
 
   bool get yaAbierta => visitado || navegadoEnSesion;
-  bool get destacarConfirmacion =>
-      confirmacionHabilitada && navegadoEnSesion && !visitado;
+  bool get destacarConfirmacionEfectivo =>
+      destacarConfirmacion && confirmacionHabilitada && !visitado;
   bool get mostrarBotonConfirmar =>
       legIndex != null && !visitado && onMarcarHecha != null;
+}
+
+/// Cantidad de paradas/destinos confirmados (orden libre).
+int multiparadaLegsConfirmadosCount(Viaje v, {required int totalLegs}) =>
+    multiparadaLegsVisitadosDesdeViaje(v, totalLegs: totalLegs).length;
+
+/// Ruta multiparada terminada según visitas registradas en el viaje.
+bool multiparadaRutaCompletaDesdeViaje(Viaje v, {required int totalLegs}) {
+  if (totalLegs <= 0) return true;
+  if (v.multiparadaCompleta) return true;
+  return multiparadaLegsConfirmadosCount(v, totalLegs: totalLegs) >= totalLegs;
 }
 
 /// Índices de legs multiparada ya confirmados en Firestore (orden libre).
@@ -222,7 +236,7 @@ class MultiparadaNavegacionTarjeta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final esperandoConfirmacion = model.destacarConfirmacion;
+    final esperandoConfirmacion = model.destacarConfirmacionEfectivo;
     final yaAbierta = model.visitado || model.navegadoEnSesion;
     final acento = model.acento;
     final colorBorde = esperandoConfirmacion

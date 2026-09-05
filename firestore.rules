@@ -134,6 +134,56 @@ service cloud.firestore {
         request.resource.data.taxistaId == "";
     }
 
+    /// Paridad app: [ClienteVerificacionIdentidadService.debeVerificarAhora] (invertida).
+    /// Bloquea solo rechazada o intervalo vencido; «pendiente» ADM no bloquea.
+    function selfieIntervaloDiasUsuario(u) {
+      let d = u.data.verificacionIdentidadIntervaloDias;
+      return (d is int && d >= 1 && d <= 365) ? d : 30;
+    }
+
+    function selfieRevisionUsuario(u) {
+      let v = u.data.verificacionIdentidadRevision;
+      return v == "aprobada" ? "aprobada" :
+        v == "rechazada" ? "rechazada" : "pendiente";
+    }
+
+    function esCuentaPasajeroSelfieUsuario(u) {
+      let rol = u.data.rol is string ? u.data.rol : "cliente";
+      return rol == "cliente" || rol == "user" || rol == "" ||
+        u.data.registroClienteCompleto == true ||
+        (u.data.verificacionIdentidadUrl is string &&
+          u.data.verificacionIdentidadUrl != "") ||
+        u.data.verificacionIdentidadEn != null;
+    }
+
+    function selfieVencidaUsuario(u) {
+      let dias = selfieIntervaloDiasUsuario(u);
+      let ultima = u.data.verificacionIdentidadEn;
+      let registro = u.data.fechaRegistro != null
+        ? u.data.fechaRegistro
+        : u.data.createdAt;
+      return ultima is timestamp
+        ? request.time >= ultima + duration.value(dias, "d")
+        : (registro is timestamp
+          ? request.time >= registro + duration.value(dias, "d")
+          : true);
+    }
+
+    function clienteSelfieAptaParaPedirViaje(uid) {
+      let u = userDoc(uid);
+      return u.exists &&
+        (!esCuentaPasajeroSelfieUsuario(u) ||
+          (selfieRevisionUsuario(u) != "rechazada" && !selfieVencidaUsuario(u)));
+    }
+
+    /// Último muro: bloqueo ADM, impago factura y selfie (creación directa en viajes/).
+    function clienteAptoParaCrearViaje(uid) {
+      return exists(/databases/$(database)/documents/usuarios/$(uid)) &&
+        !(userDoc(uid).data.bloqueado == true) &&
+        !(userDoc(uid).data.tieneCobroViajePendiente == true) &&
+        clienteSelfieAptaParaPedirViaje(uid);
+    }
+
     /// Pedido = pasajero publica (app unificada: mismo uid puede ser chofer operativo).
     /// Oferta «Voy para» = solo chofer publica.
     function bolaPuebloCreateRolTipoCoherente() {
@@ -883,6 +933,7 @@ service cloud.firestore {
         );
 
       allow create: if puedeCrearViajeComoCliente() &&
+        clienteAptoParaCrearViaje(request.auth.uid) &&
         request.resource.data.uidCliente == request.auth.uid &&
         request.resource.data.clienteId == request.auth.uid &&
         request.resource.data.uidTaxista == "" &&

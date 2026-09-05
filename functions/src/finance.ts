@@ -1698,6 +1698,18 @@ export const finalizarViajeSeguro = onCall(async (request) => {
     try {
       const vPost = await viajeRef.get();
       const vdPost = (vPost.data() ?? {}) as AnyMap;
+      const uidClientePost = String(vdPost.uidCliente ?? vdPost.clienteId ?? "").trim();
+      if (uidClientePost && vdPost.corporativo !== true) {
+        const { enviarPushUid } = await import("./corporativo_notificaciones.js");
+        void enviarPushUid(
+          uidClientePost,
+          "Viaje finalizado",
+          "Tu factura está lista. Toca para ver el resumen.",
+          { type: "viaje_completado", viajeId },
+        ).catch((e) =>
+          logger.warn("notificarClienteViajeCompletado", { viajeId, uidClientePost, e }),
+        );
+      }
       if (vdPost.corporativo === true) {
         const { acumularViajeCorporativoEnPeriodo } = await import(
           "./corporativo_billing.js"
