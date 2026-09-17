@@ -70,16 +70,48 @@ class FacturaViaje extends StatelessWidget {
   }) async {
     final String id = viajeId.trim();
     if (id.isEmpty) return;
-    if (role == 'cliente') {
-      try {
-        final snap =
-            await FirebaseFirestore.instance.collection('viajes').doc(id).get();
-        final d = snap.data();
-        if (d != null && CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
+
+    Map<String, dynamic>? semilla = viajeDataSemilla == null
+        ? null
+        : Map<String, dynamic>.from(viajeDataSemilla);
+
+    // Precarga servidor: evita pantalla vacía en historial si el stream tarda o falla.
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(id)
+          .get(const GetOptions(source: Source.server));
+      final d = snap.data();
+      if (d != null && d.isNotEmpty) {
+        if (role == 'cliente' &&
+            CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
           return;
         }
-      } catch (_) {}
+        semilla = semilla == null || semilla.isEmpty
+            ? Map<String, dynamic>.from(d)
+            : <String, dynamic>{...semilla, ...d};
+      }
+    } catch (_) {
+      if (semilla == null || semilla.isEmpty) {
+        try {
+          final snapCache = await FirebaseFirestore.instance
+              .collection('viajes')
+              .doc(id)
+              .get(const GetOptions(source: Source.cache));
+          final d = snapCache.data();
+          if (d != null && d.isNotEmpty) {
+            if (role == 'cliente' &&
+                CorporativoTaxistaService.debeOcultarEnAppCliente(d)) {
+              return;
+            }
+            semilla = semilla == null || semilla.isEmpty
+                ? Map<String, dynamic>.from(d)
+                : <String, dynamic>{...semilla, ...d};
+          }
+        } catch (_) {}
+      }
     }
+
     if (!context.mounted) return;
     await Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
@@ -87,9 +119,7 @@ class FacturaViaje extends StatelessWidget {
           viajeId: id,
           role: role,
           autoCerrarAlContinuar: autoCerrarAlContinuar,
-          viajeDataSemilla: viajeDataSemilla == null
-              ? null
-              : Map<String, dynamic>.from(viajeDataSemilla),
+          viajeDataSemilla: semilla,
         ),
         fullscreenDialog: true,
       ),
@@ -185,8 +215,23 @@ class FacturaViaje extends StatelessWidget {
                   !snap.hasData &&
                   (viajeDataSemilla == null || viajeDataSemilla!.isEmpty)) {
                 return _FacturaEsperaRegistroPanel(
+                  viajeId: viajeId,
                   onContinuar: () {
                     Navigator.of(context, rootNavigator: true).maybePop();
+                  },
+                  onDatosRecuperados: (recuperado) {
+                    if (!context.mounted) return;
+                    Navigator.of(context, rootNavigator: true).pushReplacement(
+                      MaterialPageRoute<void>(
+                        builder: (_) => FacturaViaje(
+                          viajeId: viajeId,
+                          role: role,
+                          autoCerrarAlContinuar: autoCerrarAlContinuar,
+                          viajeDataSemilla: recuperado,
+                        ),
+                        fullscreenDialog: true,
+                      ),
+                    );
                   },
                 );
               }
@@ -198,8 +243,8 @@ class FacturaViaje extends StatelessWidget {
                     children: [
                       Text(
                         snap.hasError
-                            ? 'No pudimos cargar el comprobante ahora. '
-                                'Tu viaje ya está cerrado; podés continuar.'
+                            ? 'No pudimos sincronizar el comprobante en vivo. '
+                                'Revisá tu conexión o intentá de nuevo desde Mis viajes.'
                             : 'No encontramos el registro de este viaje en la plataforma RAI.',
                         textAlign: TextAlign.center,
                         style:
@@ -1141,9 +1186,9 @@ class _FacturaContentState extends State<_FacturaContent> {
                           ),
                         ),
                         child: Text(
-                          'Deuda registrada con RAI por '
+                          'Pago con tarjeta pendiente con RAI: '
                           '${FormatosMoneda.rd(MetodoPagoViaje.cobroClienteMontoRd(data))}. '
-                          'No podrás pedir viajes hasta pagar. Contactá soporte en la app si necesitás ayuda.',
+                          'Completá el cobro abajo para poder pedir otro viaje.',
                           style: const TextStyle(fontSize: 13, height: 1.35),
                         ),
                       ),
@@ -2191,11 +2236,17 @@ class _Row extends StatelessWidget {
   }
 }
 
-/// Comprobante: espera del registro con salida si Firestore tarda.
+/// Comprobante: espera del registro con reintento servidor antes de fallar.
 class _FacturaEsperaRegistroPanel extends StatefulWidget {
-  const _FacturaEsperaRegistroPanel({required this.onContinuar});
+  const _FacturaEsperaRegistroPanel({
+    required this.viajeId,
+    required this.onContinuar,
+    this.onDatosRecuperados,
+  });
 
+  final String viajeId;
   final VoidCallback onContinuar;
+  final void Function(Map<String, dynamic> data)? onDatosRecuperados;
 
   @override
   State<_FacturaEsperaRegistroPanel> createState() =>
@@ -2204,17 +2255,37 @@ class _FacturaEsperaRegistroPanel extends StatefulWidget {
 
 class _FacturaEsperaRegistroPanelState
     extends State<_FacturaEsperaRegistroPanel> {
-  static const Duration _kTimeout = Duration(seconds: 8);
+  static const Duration _kTimeout = Duration(seconds: 12);
   Timer? _timer;
   bool _mostrarEscape = false;
+  bool _reintentando = false;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(_kTimeout, () {
-      if (!mounted) return;
-      setState(() => _mostrarEscape = true);
+    _timer = Timer(_kTimeout, _onTimeout);
+  }
+
+  Future<void> _onTimeout() async {
+    if (!mounted) return;
+    setState(() {
+      _mostrarEscape = true;
+      _reintentando = true;
     });
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('viajes')
+          .doc(widget.viajeId)
+          .get(const GetOptions(source: Source.server));
+      final d = snap.data();
+      if (!mounted) return;
+      if (d != null && d.isNotEmpty) {
+        widget.onDatosRecuperados?.call(Map<String, dynamic>.from(d));
+        return;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _reintentando = false);
   }
 
   @override
@@ -2232,22 +2303,27 @@ class _FacturaEsperaRegistroPanelState
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
+            if (_reintentando)
+              const CircularProgressIndicator()
+            else
+              const CircularProgressIndicator(),
             const SizedBox(height: 16),
             Text(
               _mostrarEscape
-                  ? 'No pudimos cargar el comprobante ahora. '
-                      'Tu viaje ya está cerrado; podés continuar.'
+                  ? (_reintentando
+                      ? 'Recuperando comprobante…'
+                      : 'No pudimos cargar el comprobante ahora. '
+                          'Revisá tu conexión o intentá de nuevo.')
                   : 'Cargando comprobante…',
               textAlign: TextAlign.center,
               style: TextStyle(color: muted, height: 1.35),
             ),
-            if (_mostrarEscape) ...[
+            if (_mostrarEscape && !_reintentando) ...[
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: widget.onContinuar,
                 icon: const Icon(Icons.arrow_forward_rounded),
-                label: const Text('Continuar'),
+                label: const Text('Cerrar'),
               ),
             ],
           ],

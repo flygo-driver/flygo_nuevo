@@ -176,8 +176,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       await _probarIndices();
       _arrancarTimbres();
       if (mounted) setState(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (mounted) await _flushTimbreOfertasParaTab(_tabPool.index);
     });
     _cargarUbicacionCache();
     unawaited(_refrescarEstadoGps());
@@ -185,7 +183,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
 
   void _onPoolTabChanged() {
     if (_tabPool.indexIsChanging || !mounted) return;
-    unawaited(_flushTimbreOfertasParaTab(_tabPool.index));
+    unawaited(_marcarOfertasTabVistasSinTimbre(_tabPool.index));
   }
 
   Future<void> _refrescarEstadoGps() async {
@@ -416,10 +414,6 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
       if (_usarFallbackSinIndiceAhora || _usarFallbackSinIndiceProg) {
         unawaited(_probarIndices());
       }
-      unawaited(Future<void>.delayed(const Duration(milliseconds: 700), () async {
-        if (!mounted) return;
-        await _flushTimbreOfertasParaTab(_tabPool.index);
-      }));
       setState(() {});
     }
     if (state == AppLifecycleState.paused ||
@@ -642,26 +636,20 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     return n(data['precio']) > 0.009 || n(data['precioFinal'] ?? data['total']) > 0.009;
   }
 
-  Future<void> _flushTimbreOfertasParaTab(int tabIndex) async {
+  Future<void> _marcarOfertasTabVistasSinTimbre(int tabIndex) async {
     if (!_appEnForeground) return;
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    if (myUid.isNotEmpty && !await RolesService.getDisponibilidad(myUid)) {
-      return;
-    }
-    final pendientes = _idsOfertasNoVistasEnTab(tabIndex, myUid);
-    if (pendientes.isEmpty) return;
-
-    await NotificationService.I.playPoolOfferSoundInApp();
-    for (final item in pendientes) {
+    for (final item in _idsOfertasNoVistasEnTab(tabIndex, myUid)) {
       _vistosParaTimbre.add(item.id);
       TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
-      if (_viajeTienePrecioReal(item.data)) {
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: item.id,
-          titulo: item.titulo,
-          cuerpo: item.cuerpo,
-          skipSound: true,
-        );
+    }
+  }
+
+  void _marcarTodasLasOfertasInicialesSinTimbre(String myUid) {
+    for (final int tab in const <int>[0, 1]) {
+      for (final item in _idsOfertasNoVistasEnTab(tab, myUid)) {
+        _vistosParaTimbre.add(item.id);
+        TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
       }
     }
   }
@@ -712,28 +700,7 @@ class _PoolTurismoTaxistaState extends State<PoolTurismoTaxista>
     _entradaInicialProcesada = true;
 
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final pendientes =
-        _idsOfertasNoVistasEnTab(_tabPool.index, myUid);
-
-    final bool disponible = myUid.isEmpty ||
-        await RolesService.getDisponibilidad(myUid);
-
-    if (pendientes.isNotEmpty && disponible) {
-      await NotificationService.I.playPoolOfferSoundInApp();
-    }
-
-    for (final item in pendientes) {
-      _vistosParaTimbre.add(item.id);
-      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${item.id}');
-      if (_viajeTienePrecioReal(item.data)) {
-        await NotificationService.I.notifyNuevoViaje(
-          viajeId: item.id,
-          titulo: item.titulo,
-          cuerpo: item.cuerpo,
-          skipSound: true,
-        );
-      }
-    }
+    _marcarTodasLasOfertasInicialesSinTimbre(myUid);
   }
 
   Future<void> _procesarNuevasOfertasEnTabActivo(

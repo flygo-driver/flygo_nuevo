@@ -1,11 +1,30 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
 
+import 'package:flygo_nuevo/servicios/cliente_cobro_tarjeta_pendiente_service.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_tarjeta_pendiente_sheet.dart';
 
 /// Mensajes claros al confirmar un viaje (sin códigos crudos de Functions).
 abstract final class CrearViajeErrores {
   CrearViajeErrores._();
+
+  static bool esBloqueoTarjetaPendiente(Object error) {
+    return ClienteCobroTarjetaPendienteService.esBloqueoTarjetaPendiente(error);
+  }
+
+  /// Snackbar genérico o hoja con factura + soporte si es tarjeta pendiente.
+  static Future<void> manejarEnUi(BuildContext context, Object error) async {
+    if (esBloqueoTarjetaPendiente(error)) {
+      await ClienteTarjetaPendienteSheet.mostrar(context);
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.showSnackBar(
+      SnackBar(content: Text(traducir(error))),
+    );
+  }
 
   static String traducir(Object error) {
     if (error is ClienteVerificacionIdentidadRequeridaException) {

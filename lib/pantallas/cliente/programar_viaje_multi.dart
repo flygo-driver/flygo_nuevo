@@ -13,6 +13,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/utils/crear_viaje_errores.dart';
+import 'package:flygo_nuevo/servicios/cliente_cobro_tarjeta_pendiente_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_tarjeta_pendiente_sheet.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/directions_service.dart';
 import 'package:flygo_nuevo/servicios/tarifa_service_unificado.dart';
@@ -1727,6 +1729,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
       return;
     }
 
+    if (await ClienteCobroTarjetaPendienteService.usuarioTieneBloqueoTarjeta(
+      uid: u.uid,
+    )) {
+      if (mounted) {
+        await ClienteTarjetaPendienteSheet.mostrar(context);
+      }
+      return;
+    }
+
     if (_origen == null || _destino == null) {
       if (_origen == null &&
           RaiUbicacionClienteService.instance.bannerActivo) {
@@ -1943,19 +1954,15 @@ class _ProgramarViajeMultiState extends State<ProgramarViajeMulti> {
     } on ClienteVerificacionIdentidadRequeridaException catch (e) {
       if (mounted) _snack(e.message);
     } on FirebaseFunctionsException catch (e) {
-      if (mounted) _snack(CrearViajeErrores.traducir(e));
+      if (mounted) await CrearViajeErrores.manejarEnUi(context, e);
     } on fs.FirebaseException catch (e) {
-      if (mounted) {
-        _snack(CrearViajeErrores.traducir(e));
-      }
+      if (mounted) await CrearViajeErrores.manejarEnUi(context, e);
     } on StateError catch (e) {
       if (mounted) {
         _snack(e.message);
       }
     } catch (e) {
-      if (mounted) {
-        _snack(CrearViajeErrores.traducir(e));
-      }
+      if (mounted) await CrearViajeErrores.manejarEnUi(context, e);
     } finally {
       if (mounted && !navegoFuera) {
         setState(() => _cargando = false);

@@ -41,6 +41,7 @@ import 'package:flygo_nuevo/pantallas/admin/panel_finanzas.dart';
 import 'package:flygo_nuevo/pantallas/admin/revision_documentos_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_verificacion_identidad_cliente.dart';
 import 'package:flygo_nuevo/pantallas/admin/gestionar_usuarios_admin.dart';
+import 'package:flygo_nuevo/pantallas/admin/admin_clientes_deuda_viajes.dart';
 import 'package:flygo_nuevo/pantallas/admin/reportes_admin.dart';
 import 'package:flygo_nuevo/pantallas/admin/admin_tarifas.dart';
 import 'package:flygo_nuevo/pantallas/admin/configuracion_viaje_comision_admin.dart';
@@ -503,6 +504,17 @@ class AdminDrawer extends StatelessWidget {
             style: subtleStyle,
           ),
           onTap: () => _push(context, const GestionarUsuariosAdmin()),
+        ),
+        ListTile(
+          leading: Icon(Icons.money_off_csred,
+              color: isLight ? Colors.deepOrange : Colors.orangeAccent),
+          title: Text('Tarjeta sin cobrar RAI',
+              style: titleStyle.copyWith(fontWeight: FontWeight.w600)),
+          subtitle: Text(
+            'Solo tarjeta bloquea cliente · ver comprobante · regularizar',
+            style: subtleStyle,
+          ),
+          onTap: () => _push(context, const AdminClientesDeudaViajes()),
         ),
         Divider(color: dividerColor),
         Padding(

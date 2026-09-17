@@ -287,8 +287,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
       await _probarIndices();
       _arrancarTimbres();
       if (mounted) setState(() {});
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (mounted) await _flushTimbreOfertasParaTab(_tabPool.index);
     });
 
     // 🔥 Cargar ubicación guardada inmediatamente
@@ -490,10 +488,6 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     if (state == AppLifecycleState.resumed) {
       _arrancarTimbres();
       unawaited(_reconciliarViajeActivoAlResume());
-      unawaited(Future<void>.delayed(const Duration(milliseconds: 700), () async {
-        if (!mounted) return;
-        await _flushTimbreOfertasParaTab(_tabPool.index);
-      }));
       if (mounted) setState(() {});
     }
     if (state == AppLifecycleState.paused ||
@@ -505,7 +499,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
   void _onPoolTabChanged() {
     if (_tabPool.indexIsChanging || !mounted) return;
-    unawaited(_flushTimbreOfertasParaTab(_tabPool.index));
+    // Solo marcar vistas: el timbre suena con viajes nuevos en el stream, no al cambiar pestaña.
+    unawaited(_marcarOfertasTabVistasSinTimbre(_tabPool.index));
   }
 
   /// Tras finalizar viaje: marcar ofertas ya visibles como vistas sin timbre.
@@ -519,26 +514,26 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
     return true;
   }
 
-  /// Al entrar a una pestaña: un timbre si hay ofertas no vistas acumuladas.
-  Future<void> _flushTimbreOfertasParaTab(int tabIndex) async {
+  /// Marca ofertas ya listadas como vistas (sin timbre ni bandeja).
+  Future<void> _marcarOfertasTabVistasSinTimbre(int tabIndex) async {
     if (!_appEnForeground) return;
     final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    if (!await _taxistaDisponibleParaTimbre(myUid)) return;
-
     final int logico = _sinCompartidos ? tabIndex + 1 : tabIndex;
-    final pendientes = _idsOfertasNoVistasEnTab(logico, myUid);
-    if (pendientes.isEmpty) return;
-    if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
-
-    await NotificationService.I.playPoolOfferSoundInApp();
-    for (final item in pendientes) {
+    for (final item in _idsOfertasNoVistasEnTab(logico, myUid)) {
       _vistosParaTimbre.add(item.id);
-      await _notificarOfertaEnBandejaSiAplica(
-        id: item.id,
-        data: item.data,
-        titulo: item.titulo,
-        cuerpo: item.cuerpo,
-      );
+      TaxistaPoolTimbreDedupe.instance.marcarVisto(item.id);
+    }
+  }
+
+  void _marcarTodasLasOfertasInicialesSinTimbre(String myUid) {
+    final Iterable<int> tabs = _sinCompartidos
+        ? const <int>[1, 2]
+        : const <int>[0, 1, 2];
+    for (final int tab in tabs) {
+      for (final item in _idsOfertasNoVistasEnTab(tab, myUid)) {
+        _vistosParaTimbre.add(item.id);
+        TaxistaPoolTimbreDedupe.instance.marcarVisto(item.id);
+      }
     }
   }
 
@@ -593,22 +588,8 @@ class _ViajeDisponibleState extends State<ViajeDisponible>
 
     if (_silenciarTimbreReentradaTrasFinalizar(pendientes)) return;
 
-    if (pendientes.isNotEmpty &&
-        await _taxistaDisponibleParaTimbre(myUid)) {
-      await NotificationService.I.playPoolOfferSoundInApp();
-    }
-
-    for (final item in pendientes) {
-      _vistosParaTimbre.add(item.id);
-      if (await _taxistaDisponibleParaTimbre(myUid)) {
-        await _notificarOfertaEnBandejaSiAplica(
-          id: item.id,
-          data: item.data,
-          titulo: item.titulo,
-          cuerpo: item.cuerpo,
-        );
-      }
-    }
+    // Viajes ya en pantalla al abrir el pool: no timbre (solo entradas nuevas después).
+    _marcarTodasLasOfertasInicialesSinTimbre(myUid);
   }
 
   Future<void> _procesarNuevasOfertasEnTabActivo(

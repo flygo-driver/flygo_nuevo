@@ -766,9 +766,19 @@ async function getRole(uid: string): Promise<string> {
   return rolRoles;
 }
 
+/** Alineado con ViajesRepo.uidClienteDesdeDocViaje (Flutter): `??` no cae a clienteId si uidCliente es ''. */
+function uidClienteDesdeViajeDoc(d: AnyMap): string {
+  const u = String(d.uidCliente ?? "").trim();
+  if (u) return u;
+  const c = String(d.clienteId ?? "").trim();
+  if (c) return c;
+  return String(d.uid ?? "").trim();
+}
+
 /** Alineado con EstadosViaje.normalizar (Flutter): alias legacy y espacios. */
 function normalizeEstadoViajeDoc(raw: unknown): string {
   const s = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (s === "asignado") return "aceptado";
   if (s === "encurso" || s === "en_curso" || s === "en_curzo") return "en_curso";
   if (
     s === "a_bordo" ||
@@ -2558,9 +2568,17 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "No se puede cancelar en este estado");
     }
 
-    const uidCliente = String(d.uidCliente ?? d.clienteId ?? d.uid ?? "").trim();
+    const uidCliente = uidClienteDesdeViajeDoc(d);
     const esTurismo = String(d.tipoServicio ?? "").trim() === "turismo";
     const uidChoferLimpieza = uidTx || uidActor;
+
+    // Firestore exige todas las lecturas antes de cualquier escritura.
+    let choferTurismoLimpiezaSnap = choferTurismoSnap;
+    if (esTurismo && uidChoferLimpieza && uidChoferLimpieza !== uidActor) {
+      choferTurismoLimpiezaSnap = await tx.get(
+        db().collection("choferes_turismo").doc(uidChoferLimpieza),
+      );
+    }
 
     // Cancelación total (antes de abordar): limpia viaje en curso del cliente también.
     const cancelPatch: Record<string, unknown> = {
@@ -2614,20 +2632,16 @@ export const cancelarViajeTaxistaSeguro = onCall(async (request) => {
       }, { merge: true });
     }
 
-    if (esTurismo && uidChoferLimpieza) {
-      const choferRef = db().collection("choferes_turismo").doc(uidChoferLimpieza);
-      const choferSnap = await tx.get(choferRef);
-      if (choferSnap.exists) {
-        const choferData = (choferSnap.data() ?? {}) as AnyMap;
-        const viajeActual = String(choferData.viajeActualId ?? "").trim();
-        if (viajeActual === viajeId || viajeActual === "") {
-          tx.update(choferRef, {
-            disponible: true,
-            viajeActualId: "",
-            updatedAt: FieldValue.serverTimestamp(),
-            actualizadoEn: FieldValue.serverTimestamp(),
-          });
-        }
+    if (esTurismo && uidChoferLimpieza && choferTurismoLimpiezaSnap.exists) {
+      const choferData = (choferTurismoLimpiezaSnap.data() ?? {}) as AnyMap;
+      const viajeActual = String(choferData.viajeActualId ?? "").trim();
+      if (viajeActual === viajeId || viajeActual === "") {
+        tx.update(choferTurismoLimpiezaSnap.ref, {
+          disponible: true,
+          viajeActualId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        });
       }
     }
 
@@ -2679,7 +2693,7 @@ export const cancelarViajeClienteSeguro = onCall(async (request) => {
     if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no existe");
     const d = (vSnap.data() ?? {}) as AnyMap;
 
-    const uidCliente = String(d.uidCliente ?? d.clienteId ?? d.uid ?? "").trim();
+    const uidCliente = uidClienteDesdeViajeDoc(d);
     if (!uidCliente || uidCliente !== uidActor) {
       throw new HttpsError("permission-denied", "No autorizado para este viaje");
     }
@@ -2712,6 +2726,12 @@ export const cancelarViajeClienteSeguro = onCall(async (request) => {
 
     const uidTx = String(d.uidTaxista ?? d.taxistaId ?? "").trim();
     const esTurismo = String(d.tipoServicio ?? "").trim() === "turismo";
+
+    // Firestore exige todas las lecturas antes de cualquier escritura.
+    let choferTurismoSnap: DocumentSnapshot | null = null;
+    if (esTurismo && uidTx) {
+      choferTurismoSnap = await tx.get(db().collection("choferes_turismo").doc(uidTx));
+    }
 
     tx.update(viajeRef, {
       estado: "cancelado",
@@ -2762,20 +2782,16 @@ export const cancelarViajeClienteSeguro = onCall(async (request) => {
       );
     }
 
-    if (esTurismo && uidTx) {
-      const choferRef = db().collection("choferes_turismo").doc(uidTx);
-      const choferSnap = await tx.get(choferRef);
-      if (choferSnap.exists) {
-        const choferData = (choferSnap.data() ?? {}) as AnyMap;
-        const viajeActual = String(choferData.viajeActualId ?? "").trim();
-        if (viajeActual === viajeId || viajeActual === "") {
-          tx.update(choferRef, {
-            disponible: true,
-            viajeActualId: "",
-            updatedAt: FieldValue.serverTimestamp(),
-            actualizadoEn: FieldValue.serverTimestamp(),
-          });
-        }
+    if (choferTurismoSnap?.exists) {
+      const choferData = (choferTurismoSnap.data() ?? {}) as AnyMap;
+      const viajeActual = String(choferData.viajeActualId ?? "").trim();
+      if (viajeActual === viajeId || viajeActual === "") {
+        tx.update(choferTurismoSnap.ref, {
+          disponible: true,
+          viajeActualId: "",
+          updatedAt: FieldValue.serverTimestamp(),
+          actualizadoEn: FieldValue.serverTimestamp(),
+        });
       }
     }
 
@@ -3196,10 +3212,11 @@ export const registrarImpagoPasajeroViaje = onCall(async (request) => {
         ? Math.trunc(d.precio_cents)
         : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0);
     const montoRd = fromCents(precioCents);
-    const yaTeníaDeuda = d.cobroClientePendiente === true;
+    const esTransferencia = !esEfectivo && !esTarjeta && metodo.includes("transfer");
 
-    tx.update(viajeRef, {
-      cobroClientePendiente: true,
+    // Efectivo/transferencia: el taxista verifica el cobro; no bloqueamos al cliente.
+    // Solo tarjeta sin cobrar AZUL bloquea nuevos pedidos (cobro RAI automático).
+    const viajePatch: AnyMap = {
       cobroClienteEstado: "impago_registrado",
       cobroClienteMontoRd: montoRd,
       cobroClienteRegistradoPor: uidActor,
@@ -3208,23 +3225,117 @@ export const registrarImpagoPasajeroViaje = onCall(async (request) => {
         motivoRaw ||
         (esTarjeta
           ? "Pasajero sin fondos en tarjeta al finalizar"
-          : "Pasajero no entregó efectivo"),
+          : esTransferencia
+            ? "Taxista no confirmó la transferencia del pasajero"
+            : "Taxista reportó que el pasajero no entregó efectivo"),
+      cobroClientePendiente: esTarjeta,
       updatedAt: FieldValue.serverTimestamp(),
       actualizadoEn: FieldValue.serverTimestamp(),
-    });
-
-    const userPatch: AnyMap = {
-      tieneCobroViajePendiente: true,
-      updatedAt: FieldValue.serverTimestamp(),
     };
-    if (!yaTeníaDeuda) {
-      userPatch.deudaViajesClienteRd = FieldValue.increment(montoRd);
+    tx.update(viajeRef, viajePatch);
+
+    if (esTarjeta) {
+      const yaTeníaDeuda = d.cobroClientePendiente === true;
+      const userPatch: AnyMap = {
+        tieneCobroViajePendiente: true,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (!yaTeníaDeuda) {
+        userPatch.deudaViajesClienteRd = FieldValue.increment(montoRd);
+      }
+      tx.set(db().collection("usuarios").doc(uidCliente), userPatch, { merge: true });
     }
-    tx.set(db().collection("usuarios").doc(uidCliente), userPatch, { merge: true });
   });
 
   logger.info("[registrarImpagoPasajeroViaje] ok", { viajeId, uidActor });
   return { ok: true, viajeId };
+});
+
+/**
+ * Admin: el cliente ya pagó (efectivo/transferencia/tarjeta fuera de app) o fue error del taxista.
+ * Libera `tieneCobroViajePendiente` cuando la deuda queda en cero.
+ */
+export const adminRegularizarCobroClienteViaje = onCall(async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "No autenticado");
+  const uidActor = request.auth.uid;
+  const role = await getRole(uidActor);
+  if (role !== "admin") throw new HttpsError("permission-denied", "Solo admin");
+
+  const viajeId =
+    typeof request.data?.viajeId === "string" ? request.data.viajeId.trim() : "";
+  if (!viajeId) throw new HttpsError("invalid-argument", "Falta viajeId");
+  const nota = String(request.data?.nota ?? "").trim();
+
+  const viajeRef = db().collection("viajes").doc(viajeId);
+  const vSnap = await viajeRef.get();
+  if (!vSnap.exists) throw new HttpsError("not-found", "Viaje no encontrado");
+  const d = (vSnap.data() ?? {}) as AnyMap;
+
+  const uidCliente = String(d.uidCliente ?? d.clienteId ?? "").trim();
+  if (!uidCliente) {
+    throw new HttpsError("failed-precondition", "Viaje sin cliente");
+  }
+
+  const cobroEstado = String(d.cobroClienteEstado ?? "").trim().toLowerCase();
+  const cobroPendiente = d.cobroClientePendiente === true;
+  if (
+    !cobroPendiente &&
+    cobroEstado !== "impago_registrado" &&
+    cobroEstado !== "pendiente"
+  ) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Este viaje no tiene cobro pendiente al cliente",
+    );
+  }
+
+  const montoRd =
+    typeof d.cobroClienteMontoRd === "number" && Number.isFinite(d.cobroClienteMontoRd)
+      ? Number(d.cobroClienteMontoRd)
+      : fromCents(
+          typeof d.precio_cents === "number" && d.precio_cents > 0
+            ? Math.trunc(d.precio_cents)
+            : toCents(d.precioFinal ?? d.precio ?? d.total ?? 0),
+        );
+
+  const viajePatch: AnyMap = {
+    cobroClientePendiente: false,
+    cobroClienteEstado: "regularizado",
+    cobroClienteRegularizadoPor: uidActor,
+    cobroClienteRegularizadoEn: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    actualizadoEn: FieldValue.serverTimestamp(),
+  };
+  if (nota) viajePatch.cobroClienteNotaAdmin = nota;
+
+  const userRef = db().collection("usuarios").doc(uidCliente);
+  const uSnap = await userRef.get();
+  const u = (uSnap.data() ?? {}) as AnyMap;
+  const deudaActual =
+    typeof u.deudaViajesClienteRd === "number" && Number.isFinite(u.deudaViajesClienteRd)
+      ? Math.max(0, Number(u.deudaViajesClienteRd))
+      : 0;
+  const nuevaDeuda = Math.max(0, Number.parseFloat((deudaActual - montoRd).toFixed(2)));
+
+  // Admin regulariza → siempre libera bloqueo de pedir viaje (incl. legacy efectivo).
+  const userPatch: AnyMap = {
+    deudaViajesClienteRd: nuevaDeuda,
+    tieneCobroViajePendiente: false,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await db().runTransaction(async (tx) => {
+    tx.update(viajeRef, viajePatch);
+    tx.set(userRef, userPatch, { merge: true });
+  });
+
+  logger.info("[adminRegularizarCobroClienteViaje] ok", {
+    viajeId,
+    uidActor,
+    uidCliente,
+    montoRd,
+  });
+  return { ok: true, viajeId, uidCliente, montoRd };
 });
 
 /** Red de seguridad: corrige desalineaciones `tienePagoPendiente` / deuda pool (p. ej. CF caída). */

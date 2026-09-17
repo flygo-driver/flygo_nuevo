@@ -37,6 +37,8 @@ import 'package:flygo_nuevo/utils/formatos_moneda.dart';
 import 'package:flygo_nuevo/utils/rai_map_presentation.dart';
 import 'package:flygo_nuevo/servicios/cliente_verificacion_identidad_service.dart';
 import 'package:flygo_nuevo/utils/crear_viaje_errores.dart';
+import 'package:flygo_nuevo/servicios/cliente_cobro_tarjeta_pendiente_service.dart';
+import 'package:flygo_nuevo/widgets/cliente_tarjeta_pendiente_sheet.dart';
 import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'package:flygo_nuevo/servicios/active_trip_service.dart';
 import 'package:flygo_nuevo/widgets/overflow_safe_labeled_dropdown.dart';
@@ -2359,6 +2361,15 @@ class _ProgramarViajeState extends State<ProgramarViaje>
       return;
     }
 
+    if (await ClienteCobroTarjetaPendienteService.usuarioTieneBloqueoTarjeta(
+      uid: u.uid,
+    )) {
+      if (mounted) {
+        await ClienteTarjetaPendienteSheet.mostrar(context);
+      }
+      return;
+    }
+
     setState(() => _cargando = true);
     final ({NavigatorState? tab, NavigatorState? raiz}) nav = navCapturado;
     try {
@@ -2540,19 +2551,13 @@ class _ProgramarViajeState extends State<ProgramarViaje>
     } on ClienteVerificacionIdentidadRequeridaException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } on FirebaseFunctionsException catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(CrearViajeErrores.traducir(e))),
-      );
+      await CrearViajeErrores.manejarEnUi(context, e);
     } on fs.FirebaseException catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(CrearViajeErrores.traducir(e))),
-      );
+      await CrearViajeErrores.manejarEnUi(context, e);
     } on StateError catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(CrearViajeErrores.traducir(e))),
-      );
+      await CrearViajeErrores.manejarEnUi(context, e);
     } finally {
       if (mounted) setState(() => _cargando = false);
     }

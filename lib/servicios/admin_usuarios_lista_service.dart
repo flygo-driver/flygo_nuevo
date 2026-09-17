@@ -31,6 +31,10 @@ class AdminUsuariosListaService {
       case 'bloqueados_admin':
         q = q.where('bloqueado', isEqualTo: true);
         break;
+      case 'cobro_cliente_pendiente':
+        // Pocos registros: sin orderBy en servidor (evita índice compuesto).
+        // GestionarUsuarios ordena en memoria por actualizadoEn/updatedAt.
+        return q.where('tieneCobroViajePendiente', isEqualTo: true).limit(limite);
       case 'taxistas':
         q = q.where('rol', whereIn: const ['taxista', 'driver']);
         break;
@@ -101,6 +105,9 @@ class AdminUsuariosListaService {
             'Hasta $limiteBloqueados en vivo.';
       case 'bloqueados_admin':
         return 'Usuarios con bloqueado=true (bloqueo manual ADM). '
+            'Hasta $limiteBloqueados en vivo.';
+      case 'cobro_cliente_pendiente':
+        return 'Clientes con tieneCobroViajePendiente (no pueden pedir viaje). '
             'Hasta $limiteBloqueados en vivo.';
       case 'taxistas':
         return 'Conductores (rol taxista/driver), los $limiteVisible más recientes. '

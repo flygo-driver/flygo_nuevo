@@ -11,6 +11,8 @@ import 'package:flygo_nuevo/servicios/roles_service.dart';
 import 'package:flygo_nuevo/servicios/pagos_taxista_repo.dart';
 import 'package:flygo_nuevo/servicios/configuracion_globals_service.dart';
 import 'package:flygo_nuevo/servicios/giras_abuso_admin_service.dart';
+import 'package:flygo_nuevo/servicios/cliente_cobro_tarjeta_pendiente_service.dart';
+import 'package:flygo_nuevo/servicios/viajes_repo.dart';
 import 'admin_regularizar_giras_taxista.dart';
 
 enum _TipoBusqueda { ninguna, uid, email, emailPrefijo, telefono, textoLocal }
@@ -602,7 +604,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _usuariosListaStream() {
     final limite = _modoLista == 'bloqueados' ||
-            _modoLista == 'bloqueados_admin'
+            _modoLista == 'bloqueados_admin' ||
+            _modoLista == 'cobro_cliente_pendiente'
         ? AdminUsuariosListaService.limiteBloqueados
         : _limiteVisible;
     return AdminUsuariosListaService.streamLista(
@@ -726,6 +729,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                     _modoChip('Taxistas', 'taxistas'),
                     _modoChip('Clientes', 'clientes'),
                     _modoChip('Bloqueados prepago', 'bloqueados'),
+                    _modoChip('Cobro cliente', 'cobro_cliente_pendiente'),
                     _modoChip('Bloqueados ADM', 'bloqueados_admin'),
                   ],
                 ),
@@ -933,6 +937,7 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
         final docs = _filtrarUsuarios(rawDocs);
         final puedeMas = _modoLista != 'bloqueados' &&
             _modoLista != 'bloqueados_admin' &&
+            _modoLista != 'cobro_cliente_pendiente' &&
             _limiteVisible < AdminUsuariosListaService.limiteMaximo &&
             rawDocs.length >= _limiteVisible;
 
@@ -944,7 +949,10 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                 tipo == _TipoBusqueda.textoLocal && q.isNotEmpty
                     ? 'Sin coincidencias en este lote ($_limiteVisible usuarios).\n'
                         'Prueba email exacto, teléfono o UID, o pulsa «Cargar más».'
-                    : 'Sin resultados',
+                    : _modoLista == 'cobro_cliente_pendiente'
+                        ? 'Nadie bloqueado por cobro pendiente.\n'
+                            'Si un cliente no puede pedir viaje por tarjeta, aparecerá aquí en vivo.'
+                        : 'Sin resultados',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AdminUi.secondary(context)),
               ),
@@ -1002,7 +1010,8 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                 ),
               ),
             if (_modoLista != 'bloqueados' &&
-                _modoLista != 'bloqueados_admin')
+                _modoLista != 'bloqueados_admin' &&
+                _modoLista != 'cobro_cliente_pendiente')
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
@@ -1048,15 +1057,23 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
     final rol = _normalizarRolUi(_s(m['rol']));
     final bloqueado = _b(m['bloqueado']);
     final prepagoBloq = _b(m['tienePagoPendiente']);
+    final cobroClienteBloq = _b(m['tieneCobroViajePendiente']);
+    final double deudaClienteRd =
+        (m['deudaViajesClienteRd'] is num)
+            ? (m['deudaViajesClienteRd'] as num).toDouble()
+            : 0;
     final procesando = _uidsProcesando.contains(uid);
     final String estadoEtiqueta = bloqueado
         ? 'BLOQ. ADM'
-        : prepagoBloq
-            ? 'PREPAGO'
-            : 'OK';
-    final Color estadoColor = bloqueado || prepagoBloq
-        ? Colors.redAccent
-        : Colors.greenAccent;
+        : cobroClienteBloq
+            ? 'TARJETA'
+            : prepagoBloq
+                ? 'PREPAGO'
+                : 'OK';
+    final Color estadoColor =
+        bloqueado || cobroClienteBloq || prepagoBloq
+            ? Colors.redAccent
+            : Colors.greenAccent;
     final identidadEstado =
         ClienteVerificacionIdentidadService.esCuentaPasajeroParaSelfie(m)
             ? ClienteVerificacionIdentidadService.estadoDesde(m)
@@ -1127,6 +1144,18 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
             '${(m['isAdmin'] == true || m['admin'] == true) && rol != Roles.admin ? ' · flag isAdmin' : ''}',
             style: TextStyle(color: AdminUi.secondary(context)),
           ),
+          if (rol == Roles.cliente && cobroClienteBloq) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Tarjeta sin cobrar RAI: RD\$${deudaClienteRd.toStringAsFixed(2)} · '
+              'bloquea pedir viajes hasta regularizar.',
+              style: const TextStyle(
+                color: Colors.orangeAccent,
+                fontSize: 12,
+                height: 1.3,
+              ),
+            ),
+          ],
           if (rol == Roles.cliente &&
               identidadEstado != ClienteVerificacionIdentidadEstado.noAplica) ...[
             const SizedBox(height: 8),
@@ -1225,6 +1254,13 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
                   nombre.isNotEmpty ? nombre : uid,
                   procesando,
                 ),
+              if (rol == Roles.cliente && cobroClienteBloq)
+                _regularizarDeudaClienteBtn(
+                  uid,
+                  email.isNotEmpty ? email : nombre,
+                  deudaClienteRd,
+                  procesando,
+                ),
             ],
           ),
         ],
@@ -1306,6 +1342,159 @@ class _GestionarUsuariosAdminState extends State<GestionarUsuariosAdmin> {
         builder: (_) => AdminRegularizarGirasTaxista(
           uidTaxistaInicial: uid,
           nombreTaxistaInicial: nombreMostrar,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _dialogRegularizarDeudaCliente(
+    String uidCliente,
+    String etiqueta,
+    double deudaRd,
+  ) async {
+    final viajeCtrl = TextEditingController();
+    final notaCtrl = TextEditingController();
+
+    try {
+      final resolved =
+          await ClienteCobroTarjetaPendienteService.resolverViajeDeudaCliente(
+        uid: uidCliente,
+      );
+      if (resolved != null) {
+        viajeCtrl.text = resolved.id;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          backgroundColor: AdminUi.dialogSurface(ctx),
+          title: Text(
+            'Regularizar deuda cliente',
+            style: TextStyle(color: AdminUi.onCard(ctx)),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$etiqueta\nDeuda registrada: RD\$${deudaRd.toStringAsFixed(2)}',
+                  style: TextStyle(color: AdminUi.secondary(ctx), height: 1.35),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: viajeCtrl,
+                  style: TextStyle(color: AdminUi.onCard(ctx)),
+                  decoration: InputDecoration(
+                    labelText: 'ID del viaje (viajes/{id})',
+                    labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
+                    filled: true,
+                    fillColor: AdminUi.inputFill(ctx),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notaCtrl,
+                  style: TextStyle(color: AdminUi.onCard(ctx)),
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: 'Nota admin (opcional)',
+                    labelStyle: TextStyle(color: AdminUi.secondary(ctx)),
+                    filled: true,
+                    fillColor: AdminUi.inputFill(ctx),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Cancelar', style: TextStyle(color: cs.primary)),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Regularizar'),
+            ),
+          ],
+        );
+      },
+    );
+    if (ok != true || !mounted) {
+      viajeCtrl.dispose();
+      notaCtrl.dispose();
+      return;
+    }
+
+    final viajeId = viajeCtrl.text.trim();
+    final nota = notaCtrl.text.trim();
+    viajeCtrl.dispose();
+    notaCtrl.dispose();
+
+    if (viajeId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Indicá el ID del viaje pendiente.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _uidsProcesando.add(uidCliente));
+    try {
+      await ViajesRepo.adminRegularizarCobroClienteViaje(
+        viajeId: viajeId,
+        nota: nota,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Deuda regularizada. El cliente ya puede pedir viajes.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo regularizar: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uidsProcesando.remove(uidCliente));
+    }
+  }
+
+  Widget _regularizarDeudaClienteBtn(
+    String uid,
+    String etiqueta,
+    double deudaRd,
+    bool deshabilitado,
+  ) {
+    return InkWell(
+      onTap: deshabilitado
+          ? null
+          : () => _dialogRegularizarDeudaCliente(uid, etiqueta, deudaRd),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.orange.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.55)),
+        ),
+        child: const Text(
+          'Regularizar tarjeta pendiente',
+          style: TextStyle(
+            color: Colors.orangeAccent,
+            fontWeight: FontWeight.w800,
+          ),
         ),
       ),
     );

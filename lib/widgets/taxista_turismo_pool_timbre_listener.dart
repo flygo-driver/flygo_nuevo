@@ -124,6 +124,7 @@ class _TaxistaTurismoPoolTimbreListenerState
       if (!_appEnForeground || !_turismoAprobado) return;
       if (_ignorarPrimeraAhora) {
         _ignorarPrimeraAhora = false;
+        _sembrarSnapSinTimbre(snap);
         return;
       }
       await _procesarSnap(snap);
@@ -133,10 +134,19 @@ class _TaxistaTurismoPoolTimbreListenerState
       if (!_appEnForeground || !_turismoAprobado) return;
       if (_ignorarPrimeraProg) {
         _ignorarPrimeraProg = false;
+        _sembrarSnapSinTimbre(snap);
         return;
       }
       await _procesarSnap(snap);
     });
+  }
+
+  void _sembrarSnapSinTimbre(fs.QuerySnapshot<Map<String, dynamic>> snap) {
+    for (final d in snap.docs) {
+      final data = d.data();
+      if (!ViajePoolTaxistaGate.esTurismoPoolTomable(data)) continue;
+      TaxistaPoolTimbreDedupe.instance.marcarVisto('turismo_${d.id}');
+    }
   }
 
   Future<void> _procesarSnap(fs.QuerySnapshot<Map<String, dynamic>> snap) async {

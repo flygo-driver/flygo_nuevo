@@ -3883,6 +3883,58 @@ class ViajesRepo {
     });
   }
 
+  /// Admin: cliente pagó o fue error de impago — libera deuda y bloqueo de nuevos viajes.
+  static Future<void> adminRegularizarCobroClienteViaje({
+    required String viajeId,
+    String? nota,
+  }) async {
+    final callable = FirebaseFunctions.instanceFor(region: 'us-central1')
+        .httpsCallable('adminRegularizarCobroClienteViaje');
+    await callable.call(<String, dynamic>{
+      'viajeId': viajeId,
+      if (nota != null && nota.trim().isNotEmpty) 'nota': nota.trim(),
+    });
+  }
+
+  /// Respaldo ADM: libera flag en perfil (efectivo/transfer legacy). Rules permiten admin.
+  static Future<void> adminLiberarPerfilCobroCliente({
+    required String uidCliente,
+  }) async {
+    final String uid = uidCliente.trim();
+    if (uid.isEmpty) throw ArgumentError('UID cliente inválido');
+    await _db.collection('usuarios').doc(uid).set(<String, dynamic>{
+      'tieneCobroViajePendiente': false,
+      'deudaViajesClienteRd': 0,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'actualizadoEn': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Callable servidor; si falla (p. ej. CF sin desplegar), libera al menos el perfil.
+  static Future<void> adminRegularizarOLiberarCobroCliente({
+    required String uidCliente,
+    required String viajeId,
+    String? nota,
+    bool legacyEfectivoOTransfer = false,
+  }) async {
+    final String vid = viajeId.trim();
+    if (legacyEfectivoOTransfer || vid.isEmpty) {
+      await adminLiberarPerfilCobroCliente(uidCliente: uidCliente);
+      return;
+    }
+    try {
+      await adminRegularizarCobroClienteViaje(viajeId: vid, nota: nota);
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'internal' ||
+          e.code == 'not-found' ||
+          e.code == 'unavailable') {
+        await adminLiberarPerfilCobroCliente(uidCliente: uidCliente);
+        return;
+      }
+      rethrow;
+    }
+  }
+
   static Future<void> rechazarTransferenciaCliente({
     required String viajeId,
     required String motivo,
@@ -4237,30 +4289,29 @@ class ViajesRepo {
           .timeout(const Duration(seconds: 20));
       return;
     } on FirebaseFunctionsException catch (e) {
-      if (e.code == 'failed-precondition') {
-        final msg = (e.message ?? '').toLowerCase();
-        if (msg.contains('cerrado') ||
-            msg.contains('cancelado') ||
-            msg.contains('finaliz')) {
-          try {
-            final fresh = await leerViajeServidor(viajeId);
-            if (fresh != null) {
-              final n = EstadosViaje.normalizar(
-                  (fresh['estado'] ?? '').toString());
-              if (EstadosViaje.esCancelado(n)) return;
-            }
-          } catch (_) {}
+      if (e.code == 'failed-precondition' || e.code == 'permission-denied') {
+        if (e.code == 'failed-precondition') {
+          final msg = (e.message ?? '').toLowerCase();
+          if (msg.contains('cerrado') ||
+              msg.contains('cancelado') ||
+              msg.contains('finaliz')) {
+            try {
+              final fresh = await leerViajeServidor(viajeId);
+              if (fresh != null) {
+                final n = EstadosViaje.normalizar(
+                    (fresh['estado'] ?? '').toString());
+                if (EstadosViaje.esCancelado(n)) return;
+              }
+            } catch (_) {}
+          }
         }
         try {
-          final fresh = await leerViajeServidor(viajeId);
-          if (fresh != null && clienteCancelableSegunDoc(fresh)) {
-            await _cancelarPorClienteLocalFallback(
-              viajeId: viajeId,
-              uidCliente: uidCliente,
-              motivo: motivo,
-            );
-            return;
-          }
+          await _cancelarPorClienteLocalFallback(
+            viajeId: viajeId,
+            uidCliente: uidCliente,
+            motivo: motivo,
+          );
+          return;
         } catch (_) {}
       }
       if (e.code == 'unavailable' ||

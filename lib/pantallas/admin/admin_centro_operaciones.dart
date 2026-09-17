@@ -23,6 +23,7 @@ import 'gestionar_usuarios_admin.dart';
 import 'revision_documentos_admin.dart';
 import 'taxistas_turismo_admin.dart';
 import 'verificar_pagos.dart';
+import 'admin_clientes_deuda_viajes.dart';
 
 class AdminCentroOperaciones extends StatelessWidget {
   const AdminCentroOperaciones({super.key});
@@ -117,6 +118,10 @@ class AdminCentroOperaciones extends StatelessWidget {
               context,
               const GestionarUsuariosAdmin(modoInicial: 'bloqueados'),
             ),
+          ),
+          const SizedBox(height: 10),
+          _ColaClientesDeudaViajeCard(
+            onTap: () => _push(context, const AdminClientesDeudaViajes()),
           ),
           const SizedBox(height: 24),
           Text(
@@ -518,6 +523,36 @@ class _ColaCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ColaClientesDeudaViajeCard extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ColaClientesDeudaViajeCard({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('usuarios')
+          .where('tieneCobroViajePendiente', isEqualTo: true)
+          .limit(100)
+          .snapshots(),
+      builder: (context, snap) {
+        final n = snap.data?.docs.length ?? 0;
+        return _ColaCard(
+          icon: Icons.money_off_csred,
+          color: Colors.deepOrange,
+          titulo: 'Tarjeta sin cobrar RAI',
+          subtitulo: 'Clientes bloqueados (tieneCobroViajePendiente) en vivo',
+          count: n,
+          detalle: n == 0
+              ? 'Sin clientes bloqueados por cobro'
+              : 'Ver comprobante y regularizar cobro',
+          onTap: onTap,
+        );
+      },
     );
   }
 }

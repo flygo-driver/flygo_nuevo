@@ -76,17 +76,64 @@ function clienteDebeVerificarSelfie(userData: AnyMap): boolean {
   return true;
 }
 
+function metodoPagoEsTarjeta(metodo: unknown): boolean {
+  const m = trimOrEmpty(metodo).toLowerCase();
+  if (m.includes("efectivo") || m.includes("transfer")) return false;
+  return m.includes("tarjeta") || m.includes("card");
+}
+
+async function clienteTieneTarjetaPendienteReal(uid: string): Promise<boolean> {
+  for (const campo of ["uidCliente", "clienteId"] as const) {
+    const snap = await db()
+      .collection("viajes")
+      .where(campo, "==", uid)
+      .where("cobroClientePendiente", "==", true)
+      .limit(10)
+      .get();
+    for (const doc of snap.docs) {
+      const data = (doc.data() ?? {}) as AnyMap;
+      if (metodoPagoEsTarjeta(data.metodoPago)) return true;
+    }
+  }
+  return false;
+}
+
+async function limpiarBloqueoCobroLegacyCliente(uid: string): Promise<void> {
+  await db()
+    .collection("usuarios")
+    .doc(uid)
+    .set(
+      {
+        tieneCobroViajePendiente: false,
+        deudaViajesClienteRd: 0,
+        updatedAt: FieldValue.serverTimestamp(),
+        actualizadoEn: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+}
+
+async function assertClienteSinBloqueoTarjetaPendiente(
+  uid: string,
+  userData: AnyMap,
+): Promise<void> {
+  if (userData.tieneCobroViajePendiente !== true) return;
+  const tarjetaReal = await clienteTieneTarjetaPendienteReal(uid);
+  if (tarjetaReal) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Tienes un pago con tarjeta pendiente con RAI. Abrí la factura del viaje y completá el cobro antes de pedir otro.",
+    );
+  }
+  // Flag residual de efectivo/transfer (taxista verifica): no bloquea al cliente.
+  await limpiarBloqueoCobroLegacyCliente(uid);
+}
+
 function assertClienteAptoParaCrearViaje(userData: AnyMap): void {
   if (userData.bloqueado === true) {
     throw new HttpsError(
       "failed-precondition",
       "Tu cuenta fue suspendida. Contacta soporte RAI para más información.",
-    );
-  }
-  if (userData.tieneCobroViajePendiente === true) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Tienes un viaje sin pagar con RAI. Abre tu factura pendiente o contacta soporte para regularizar antes de pedir otro.",
     );
   }
   if (clienteDebeVerificarSelfie(userData)) {
@@ -413,6 +460,11 @@ export const crearViajePendienteCliente = onCall(async (request) => {
     const nuevoEsAhora = trip.esAhora === true;
     const viajeRef = db().collection("viajes").doc(viajeId);
     const userRef = db().collection("usuarios").doc(uid);
+
+    const userSnapPre = await userRef.get();
+    const userDataPre = (userSnapPre.data() ?? {}) as AnyMap;
+    assertClienteAptoParaCrearViaje(userDataPre);
+    await assertClienteSinBloqueoTarjetaPendiente(uid, userDataPre);
 
     await db().runTransaction(async (tx) => {
       const userSnap = await tx.get(userRef);

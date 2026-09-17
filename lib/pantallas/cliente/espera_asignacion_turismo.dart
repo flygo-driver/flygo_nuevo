@@ -1944,7 +1944,11 @@ class _EsperaAsignacionTurismoState extends State<EsperaAsignacionTurismo>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cancelar: $e')),
+        SnackBar(
+          content: Text(
+            'No se pudo cancelar: ${ViajesRepo.mensajeErrorCancelarCliente(e)}',
+          ),
+        ),
       );
     }
   }
