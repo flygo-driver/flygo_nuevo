@@ -1,9 +1,10 @@
+import '../modelo/tarifas_dinamicas_config.dart';
 import '../modelo/tarifas_tramos_config.dart';
 import 'directions_service.dart';
 import 'tarifas_tramos_calculo.dart';
 
 /// Tarifa urbana: distancia por carretera + minutos con tráfico (Google).
-/// Sin tapón (domingo, noche) aplica descuento; con tapón sube solo lo justo.
+/// RD$/min sube con la severidad del tapón; sin tapón aplica descuento fluido.
 class TarifaUrbanaTiempoResult {
   const TarifaUrbanaTiempoResult({
     required this.nucleoRd,
@@ -17,22 +18,11 @@ class TarifaUrbanaTiempoResult {
 abstract final class TarifaUrbanaTiempo {
   TarifaUrbanaTiempo._();
 
-  /// RD$/min con tráfico en vivo (urbano Carro).
-  static const double porMinutoTraficoCarro = 2.2;
-
-  /// RD$/min con tráfico (motor).
-  static const double porMinutoTraficoMotor = 1.2;
-
-  /// Si el viaje tarda menos de 10% extra vs libre → tráfico fluido (baja precio).
-  static const double ratioTraficoFluidoMax = 1.10;
-
-  /// Descuento domingo / noche / madrugada sin tapón.
-  static const double descuentoTraficoFluidoPct = 7.0;
-
-  static double porMinutoParaVehiculo(String claveVehiculo) {
-    final k = TarifasTramosConfig.normalizarClaveVehiculo(claveVehiculo);
-    if (k == 'motor') return porMinutoTraficoMotor;
-    return porMinutoTraficoCarro;
+  static double porMinutoParaVehiculo(String claveVehiculo, double ratio) {
+    return TarifasDinamicasConfig.porMinutoDesdeRatio(
+      ratio: ratio,
+      claveVehiculo: claveVehiculo,
+    );
   }
 
   /// Núcleo urbano con km + minutos reales. Requiere [DirectionsResult] con tráfico.
@@ -58,17 +48,18 @@ abstract final class TarifaUrbanaTiempo {
         minLibre > 0 ? (minTraf / minLibre) : 1.0;
 
     final double subtotalKm = baseRd + (km * porKmLocal);
-    final double porMin = porMinutoParaVehiculo(claveVehiculo);
+    final double porMin = porMinutoParaVehiculo(claveVehiculo, ratio);
     final double subtotalTiempo = minTraf * porMin;
 
     var nucleo = subtotalKm + subtotalTiempo;
     final double antesDescuento = nucleo;
 
-    final bool traficoFluido =
-        ratio.isFinite && ratio > 0 && ratio < ratioTraficoFluidoMax;
+    final bool traficoFluido = ratio.isFinite &&
+        ratio > 0 &&
+        ratio < TarifasDinamicasConfig.ratioTraficoFluidoMax;
     double descuentoPct = 0;
     if (traficoFluido) {
-      descuentoPct = descuentoTraficoFluidoPct;
+      descuentoPct = TarifasDinamicasConfig.descuentoTraficoFluidoPct;
       nucleo *= 1.0 - (descuentoPct / 100.0);
     }
 
@@ -89,6 +80,14 @@ abstract final class TarifaUrbanaTiempo {
     final int minExtra =
         (minTraf - minLibre).ceil().clamp(0, 999);
 
+    final String severidadTrafico = traficoFluido
+        ? 'fluido'
+        : ratio < TarifasDinamicasConfig.ratioTaponModerado
+            ? 'leve'
+            : ratio < TarifasDinamicasConfig.ratioTaponFuerte
+                ? 'moderado'
+                : 'fuerte';
+
     return TarifaUrbanaTiempoResult(
       nucleoRd: double.parse(nucleo.toStringAsFixed(2)),
       desglose: <String, dynamic>{
@@ -100,6 +99,7 @@ abstract final class TarifaUrbanaTiempo {
         'porKm': porKmLocal,
         'subtotalKmRd': double.parse(subtotalKm.toStringAsFixed(2)),
         'porMinutoTrafico': porMin,
+        'severidadTrafico': severidadTrafico,
         'minutosSinTrafico': minLibre.ceil(),
         'minutosConTrafico': minTraf.ceil(),
         'minutosExtraTapon': minExtra,

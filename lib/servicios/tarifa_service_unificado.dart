@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // ✅ Eliminado import no utilizado de turismo_catalogo_rd.dart
 
+import '../modelo/tarifas_dinamicas_config.dart';
 import '../modelo/tarifas_tramos_config.dart';
 import '../modelo/recargo_condiciones_cotizacion.dart';
 import 'directions_service.dart';
@@ -522,8 +523,28 @@ class TarifaServiceUnificado {
       esLargaDistancia = desgloseNucleo['esLargaDistancia'] == true;
       promoSoloLocal = tramos.promoAplicaSoloTramoLocal;
 
+      var nucleoTrayecto = nucleoRes.nucleoRd;
+      final urbanoTurismo = _nucleoUrbanoConTrafico(
+        directions: directionsCotizacion,
+        esLargaDistancia: esLargaDistancia,
+        baseRd: base,
+        porKmLocal: porKm,
+        minimoLocalRd: minimo,
+        claveVehiculo: vehiculoParaConfig,
+        precioKm: nucleoTrayecto,
+        desgloseKm: desgloseNucleo,
+      );
+      nucleoTrayecto = urbanoTurismo.precio;
+      desgloseNucleo = urbanoTurismo.desglose;
+      nucleoTrayecto = _ajustarNucleoUrbanoSinDirections(
+        nucleoRd: nucleoTrayecto,
+        esLargaDistancia: esLargaDistancia,
+        directions: directionsCotizacion,
+        desglose: desgloseNucleo,
+      );
+
       precioBase = _turismoNucleoIdaVueltaYPeaje(
-        nucleoTrayecto: nucleoRes.nucleoRd,
+        nucleoTrayecto: nucleoTrayecto,
         idaVuelta: idaVuelta,
         peaje: peaje,
         cobraPeaje: cobraPeaje,
@@ -565,7 +586,12 @@ class TarifaServiceUnificado {
         precioKm: precioBase,
         desgloseKm: desgloseNucleo,
       );
-      precioBase = urbanoMotor.precio;
+      precioBase = _ajustarNucleoUrbanoSinDirections(
+        nucleoRd: urbanoMotor.precio,
+        esLargaDistancia: esLargaDistancia,
+        directions: directionsCotizacion,
+        desglose: urbanoMotor.desglose,
+      );
       desgloseNucleo = urbanoMotor.desglose;
       if (peaje > 0) precioBase += peaje;
     }
@@ -608,7 +634,12 @@ class TarifaServiceUnificado {
         precioKm: precioBase,
         desgloseKm: desgloseNucleo,
       );
-      precioBase = urbanoNormal.precio;
+      precioBase = _ajustarNucleoUrbanoSinDirections(
+        nucleoRd: urbanoNormal.precio,
+        esLargaDistancia: esLargaDistancia,
+        directions: directionsCotizacion,
+        desglose: urbanoNormal.desglose,
+      );
       desgloseNucleo = urbanoNormal.desglose;
       if (peaje > 0) precioBase += peaje;
     } else {
@@ -623,13 +654,18 @@ class TarifaServiceUnificado {
     RecargoCondicionesCotizacion? recargoCondiciones;
     final bool usoTarifaUrbanoTiempo =
         desgloseNucleo['modo'] == 'urbano_tiempo';
-    final bool puedeRecargoUrbano = aplicarRecargoCondiciones &&
-        !esLargaDistancia &&
-        (tipoServicio == 'normal' || tipoServicio == 'motor') &&
+    final bool servicioConRecargoDinamico = tipoServicio == 'normal' ||
+        tipoServicio == 'motor' ||
+        tipoServicio == 'turismo';
+    final bool recargoTurismoUrbano =
+        tipoServicio == 'turismo' && !esLargaDistancia;
+    final bool puedeRecargoUrbano = !esLargaDistancia &&
+        servicioConRecargoDinamico &&
         latOrigenCotizacion != null &&
         lonOrigenCotizacion != null &&
         latOrigenCotizacion!.isFinite &&
-        lonOrigenCotizacion!.isFinite;
+        lonOrigenCotizacion!.isFinite &&
+        (aplicarRecargoCondiciones || recargoTurismoUrbano);
     if (puedeRecargoUrbano) {
       final baseRecargo = await RecargoCondicionesService.resolver(
         latOrigen: latOrigenCotizacion!,
@@ -638,6 +674,7 @@ class TarifaServiceUnificado {
         momentoHoraPico: momentoRecogidaHoraPico,
         incluirRecargoTapon: !usoTarifaUrbanoTiempo,
         incluirRecargoHoraPico: !usoTarifaUrbanoTiempo,
+        modoMultiplicativoUrbano: usoTarifaUrbanoTiempo,
       );
       recargoCondiciones = RecargoCondicionesService.aplicar(
         base: baseRecargo,
@@ -646,6 +683,12 @@ class TarifaServiceUnificado {
       if (recargoCondiciones.tieneRecargo) {
         precioBase = recargoCondiciones.precioDespuesRecargoRd;
       }
+      precioBase = _aplicarPisoCondicionesAdversas(
+        precioRd: precioBase,
+        distanciaKm: distanciaKm,
+        desgloseNucleo: desgloseNucleo,
+        recargo: recargoCondiciones,
+      );
     }
 
     await _getConfigPromo();
@@ -737,6 +780,52 @@ class TarifaServiceUnificado {
     });
     out[pedido] = precioAcordadoCents;
     return out;
+  }
+
+  double _ajustarNucleoUrbanoSinDirections({
+    required double nucleoRd,
+    required bool esLargaDistancia,
+    required DirectionsResult? directions,
+    required Map<String, dynamic> desglose,
+  }) {
+    if (esLargaDistancia ||
+        directions != null &&
+            directions.km > 0 &&
+            directions.seconds > 0) {
+      return nucleoRd;
+    }
+    final ajustado = nucleoRd * TarifasDinamicasConfig.factorSinDirectionsUrbano;
+    desglose['estimadoSinDirections'] = true;
+    desglose['factorSinDirections'] =
+        TarifasDinamicasConfig.factorSinDirectionsUrbano;
+    desglose['nucleoRd'] = double.parse(ajustado.toStringAsFixed(2));
+    return double.parse(ajustado.toStringAsFixed(2));
+  }
+
+  double _aplicarPisoCondicionesAdversas({
+    required double precioRd,
+    required double distanciaKm,
+    required Map<String, dynamic> desgloseNucleo,
+    required RecargoCondicionesCotizacion recargo,
+  }) {
+    // Piso solo con lluvia o tapón real; hora pico sola no fuerza mínimo alto.
+    final bool condicionesAdversas = recargo.lluvia ||
+        recargo.tapon ||
+        (recargo.ratioTrafico ?? 1.0) >=
+            TarifasDinamicasConfig.ratioTaponModerado;
+    if (!condicionesAdversas) return precioRd;
+
+    final minimoLocal =
+        (desgloseNucleo['minimoAplicadoRd'] as num?)?.toDouble() ?? 150.0;
+    final piso = TarifasDinamicasConfig.pisoUrbanoCondicionesAdversas(
+      km: distanciaKm,
+      minimoLocalRd: minimoLocal,
+      condicionesAdversas: true,
+    );
+    if (precioRd >= piso) return precioRd;
+    desgloseNucleo['pisoCondicionesAdversasRd'] =
+        double.parse(piso.toStringAsFixed(2));
+    return piso;
   }
 
   /// Urbano: km por carretera + minutos con tráfico Google (zona ciudad).

@@ -17,6 +17,8 @@ class RecargoCondicionesCotizacion {
     this.cotizadoEn,
     this.minutosSinTrafico,
     this.minutosConTrafico,
+    this.modoRecargo = 'aditivo',
+    this.factorMultiplicador = 1.0,
   });
 
   final bool horaPico;
@@ -38,7 +40,12 @@ class RecargoCondicionesCotizacion {
   final int? minutosSinTrafico;
   final int? minutosConTrafico;
 
-  bool get tieneRecargo => recargoRd > 0.009;
+  /// `aditivo` (solo km) o `multiplicativo` (urbano_tiempo).
+  final String modoRecargo;
+  final double factorMultiplicador;
+
+  bool get tieneRecargo =>
+      recargoRd > 0.009 || factorMultiplicador > 1.0001;
 
   Map<String, dynamic> toMap() => <String, dynamic>{
         'precioBloqueado': true,
@@ -61,6 +68,10 @@ class RecargoCondicionesCotizacion {
         if (precipitacionMm != null)
           'precipitacionMm': double.parse(precipitacionMm!.toStringAsFixed(2)),
         if (cotizadoEn != null) 'cotizadoEn': cotizadoEn!.toIso8601String(),
+        'modoRecargo': modoRecargo,
+        if (factorMultiplicador > 1.0001)
+          'factorMultiplicador':
+              double.parse(factorMultiplicador.toStringAsFixed(3)),
       };
 
   List<String> get etiquetasActivas {

@@ -13,6 +13,26 @@ void main() {
     expect(RecargoCondicionesService.esHoraPico(t), isTrue);
   });
 
+  test('antes de hora pico manana 7:15 no es pico', () {
+    final t = DateTime(2026, 3, 9, 7, 15);
+    expect(RecargoCondicionesService.esHoraPico(t), isFalse);
+  });
+
+  test('despues de hora pico manana 9:10 no es pico', () {
+    final t = DateTime(2026, 3, 9, 9, 10);
+    expect(RecargoCondicionesService.esHoraPico(t), isFalse);
+  });
+
+  test('tarde antes de pico 16:00 no es pico', () {
+    final t = DateTime(2026, 3, 9, 16, 0);
+    expect(RecargoCondicionesService.esHoraPico(t), isFalse);
+  });
+
+  test('tarde despues de pico 19:45 no es pico', () {
+    final t = DateTime(2026, 3, 9, 19, 45);
+    expect(RecargoCondicionesService.esHoraPico(t), isFalse);
+  });
+
   test('fuera de hora pico mediodia', () {
     final t = DateTime(2026, 3, 9, 12, 0);
     expect(RecargoCondicionesService.esHoraPico(t), isFalse);
@@ -37,35 +57,35 @@ void main() {
 
   test('tapón progresivo según ratio Google', () {
     expect(RecargoCondicionesService.pctTaponDesdeRatio(1.05), 0);
-    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.15), 8);
-    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.30), 14);
-    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.50), 20);
-    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.65), 26);
-    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.90), 30);
+    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.15), 10);
+    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.30), 16);
+    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.50), 22);
+    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.65), 28);
+    expect(RecargoCondicionesService.pctTaponDesdeRatio(1.90), 34);
   });
 
-  test('aplica recargo acumulado con tope 35%', () {
+  test('aplica recargo aditivo acumulado con tope 50%', () {
     const base = RecargoCondicionesCotizacion(
       horaPico: true,
       lluvia: true,
       tapon: true,
-      pctHoraPico: 10,
-      pctLluvia: 8,
-      pctTapon: 26,
+      pctHoraPico: 12,
+      pctLluvia: 15,
+      pctTapon: 28,
       pctTotal: 0,
       recargoRd: 0,
       precioAntesRecargoRd: 0,
       precioDespuesRecargoRd: 0,
     );
     final aplicado = RecargoCondicionesService.aplicar(base: base, precioRd: 380);
-    expect(aplicado.pctTotal, 35);
-    expect(aplicado.precioDespuesRecargoRd, 513);
+    expect(aplicado.pctTotal, 50);
+    expect(aplicado.precioDespuesRecargoRd, 570);
   });
 
-  test('urbano por tiempo: hora pico informativa sin recargo extra', () {
+  test('urbano por tiempo: recargo multiplicativo lluvia', () {
     const base = RecargoCondicionesCotizacion(
-      horaPico: true,
-      lluvia: false,
+      horaPico: false,
+      lluvia: true,
       tapon: false,
       pctHoraPico: 0,
       pctLluvia: 0,
@@ -74,10 +94,11 @@ void main() {
       recargoRd: 0,
       precioAntesRecargoRd: 0,
       precioDespuesRecargoRd: 0,
+      modoRecargo: 'multiplicativo',
     );
     final aplicado = RecargoCondicionesService.aplicar(base: base, precioRd: 358);
-    expect(aplicado.precioDespuesRecargoRd, 358);
-    expect(aplicado.tieneRecargo, isFalse);
+    expect(aplicado.precioDespuesRecargoRd, greaterThan(358));
+    expect(aplicado.tieneRecargo, isTrue);
   });
 
   test('sin condiciones no cambia precio', () {
